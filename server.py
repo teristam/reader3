@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -21,6 +21,7 @@ from tts_generator import (
     get_cached_audio,
     generate_paragraph_hash
 )
+from epub_exporter import export_single_chapter, export_full_book, sanitize_filename
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -332,6 +333,83 @@ async def tts_status(book_id: str, para_hash: str):
         "ready": is_ready,
         "audio_path": cached if cached else None
     })
+
+
+# ============= EPUB EXPORT ENDPOINTS =============
+
+@app.get("/read/{book_id}/{chapter_index}/export")
+async def export_chapter_endpoint(book_id: str, chapter_index: int):
+    """
+    Export single chapter as EPUB with AI-generated images.
+
+    Returns downloadable EPUB file.
+    """
+    print(f"[EXPORT DEBUG] Exporting chapter {chapter_index} from {book_id}")
+
+    book = load_book_cached(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    if chapter_index < 0 or chapter_index >= len(book.spine):
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    try:
+        # Generate EPUB bytes
+        epub_bytes = export_single_chapter(book, chapter_index, book_id)
+
+        # Create filename
+        safe_title = sanitize_filename(book.metadata.title)
+        filename = f"{safe_title}_Chapter_{chapter_index + 1}.epub"
+
+        print(f"[EXPORT DEBUG] Generated EPUB: {filename}, {len(epub_bytes)} bytes")
+
+        # Return as downloadable file using Response for bytes
+        return Response(
+            content=epub_bytes,
+            media_type="application/epub+zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    except Exception as e:
+        print(f"[EXPORT ERROR] Failed to export chapter: {e}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
+@app.get("/export/{book_id}")
+async def export_book_endpoint(book_id: str):
+    """
+    Export full book as EPUB with all AI-generated images.
+
+    Returns downloadable EPUB file.
+    """
+    print(f"[EXPORT DEBUG] Exporting full book: {book_id}")
+
+    book = load_book_cached(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    try:
+        # Generate EPUB bytes
+        epub_bytes = export_full_book(book, book_id)
+
+        # Create filename
+        safe_title = sanitize_filename(book.metadata.title)
+        filename = f"{safe_title}_with_illustrations.epub"
+
+        print(f"[EXPORT DEBUG] Generated EPUB: {filename}, {len(epub_bytes)} bytes")
+
+        # Return as downloadable file using Response for bytes
+        return Response(
+            content=epub_bytes,
+            media_type="application/epub+zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    except Exception as e:
+        print(f"[EXPORT ERROR] Failed to export book: {e}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
 
 if __name__ == "__main__":

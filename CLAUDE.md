@@ -157,3 +157,7 @@ Per the README, this is a "90% vibe coded" project meant as inspiration rather t
 - Single-file Python modules
 - No complex build process
 - Books managed by adding/removing directories
+
+
+## Things to take note
+- the Image object returned by `part.as_image()` is not a PIL image. It is a special  class of the Google genai package. It has `save(filename)` function which save the data as a image file. Note there is not `format` parameter there. You can use `part.as_image()._pil_image` to get the PIL image.

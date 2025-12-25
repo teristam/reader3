@@ -140,15 +140,18 @@ Chapter text:
 
         logger.success("✅ Response received from Gemini")
         logger.debug(f"Response type: {type(response)}")
-        logger.debug(f"Response parts count: {len(response.parts) if hasattr(response, 'parts') else 'N/A'}")
+        logger.debug(f"Response parts count: {len(response.parts) if hasattr(response, 'parts') and response.parts is not None else 'N/A'}")
         
         # Extract text response
         response_text = ""
-        for i, part in enumerate(response.parts):
-            logger.trace(f"Part {i}: type={type(part)}, has text={hasattr(part, 'text')}")
-            if hasattr(part, 'text') and part.text:
-                response_text += part.text
-                logger.trace(f"Part {i} text length: {len(part.text)} chars")
+        if response.parts is not None:
+            for i, part in enumerate(response.parts):
+                logger.trace(f"Part {i}: type={type(part)}, has text={hasattr(part, 'text')}")
+                if hasattr(part, 'text') and part.text:
+                    response_text += part.text
+                    logger.trace(f"Part {i} text length: {len(part.text)} chars")
+        else:
+            logger.error("❌ Response has no parts (parts is None)")
 
         logger.debug(f"Full response text length: {len(response_text)} chars")
         logger.trace(f"Response text (first 1000 chars): {response_text[:1000]}")
@@ -210,7 +213,7 @@ def create_image_prompt(scene_summary: str, book_title: str = "") -> str:
     """
     book_context = f" from the book '{book_title}'" if book_title else " from a book"
 
-    prompt = f"""Create a detailed, cinematic illustration of this scene{book_context}:
+    prompt = f"""Create a detailed, cinematic illustration of this scene {book_context}:
 
 {scene_summary}
 
@@ -218,6 +221,7 @@ The image should be:
 - High quality and visually appealing
 - Appropriate for a book illustration
 - Capturing the mood and atmosphere of the scene
+- Do not include any text in the image. Avoid making it like a comic
 - Detailed and evocative
 - In a style suitable for a literary work{f" and consistent with the themes of '{book_title}'" if book_title else ""}
 
@@ -258,7 +262,7 @@ def generate_image(prompt: str) -> bytes:
         if hasattr(response, '_raw_response'):
             logger.debug(f"Raw response: {response._raw_response}")
 
-        logger.debug(f"Response parts count: {len(response.parts) if hasattr(response, 'parts') else 'N/A'}")
+        logger.debug(f"Response parts count: {len(response.parts) if hasattr(response, 'parts') and response.parts is not None else 'N/A'}")
 
         # Check for error or safety information in response
         if hasattr(response, 'prompt_feedback'):
@@ -271,51 +275,57 @@ def generate_image(prompt: str) -> bytes:
                     logger.info(f"Candidate {i} safety_ratings: {candidate.safety_ratings}")
 
         # Extract image bytes from response (following official Gemini API pattern)
-        for i, part in enumerate(response.parts):
-            logger.debug(f"Processing part {i}: type={type(part)}")
+        if response.parts is not None:
+            for i, part in enumerate(response.parts):
+                logger.debug(f"Processing part {i}: type={type(part)}")
 
-            # Check for text response (likely an error message)
-            if part.text is not None:
-                logger.warning(f"⚠️ Part {i} contains text instead of image:")
-                logger.error(f"Text content: {part.text}")
-                continue
+                # Check for text response (likely an error message)
+                if part.text is not None:
+                    logger.warning(f"⚠️ Part {i} contains text instead of image:")
+                    logger.error(f"Text content: {part.text}")
+                    continue
 
-            # Check for image data using the official as_image() method
-            if part.inline_data is not None:
-                logger.debug(f"✓ Part {i} has inline_data, extracting image")
+                # Check for image data using the official as_image() method
+                if part.inline_data is not None:
+                    logger.debug(f"✓ Part {i} has inline_data, extracting image")
 
-                # Use the official as_image() method (returns PIL Image)
-                image = part.as_image()._pil_image
-                logger.debug(f"Image type: {type(image)}")
+                    # Use the official as_image() method (returns PIL Image)
+                    image = part.as_image()._pil_image
+                    logger.debug(f"Image type: {type(image)}")
 
-                # Convert PIL Image to PNG bytes
-                import io
-                img_byte_arr = io.BytesIO()
-                image.save(img_byte_arr, format='PNG')
-                image_bytes = img_byte_arr.getvalue()
-                logger.success(f"✅ Got image using as_image(), length: {len(image_bytes)} bytes")
+                    # Convert PIL Image to PNG bytes
+                    import io
+                    img_byte_arr = io.BytesIO()
+                    image.save(img_byte_arr, format='PNG')
+                    image_bytes = img_byte_arr.getvalue()
+                    logger.success(f"✅ Got image using as_image(), length: {len(image_bytes)} bytes")
 
-                # Validate size
-                if len(image_bytes) < 1000:
-                    logger.warning(f"⚠️ Suspiciously small image: {len(image_bytes)} bytes")
-                    raise ValueError(f"Image too small: {len(image_bytes)} bytes")
+                    # Validate size
+                    if len(image_bytes) < 1000:
+                        logger.warning(f"⚠️ Suspiciously small image: {len(image_bytes)} bytes")
+                        raise ValueError(f"Image too small: {len(image_bytes)} bytes")
 
-                return image_bytes
+                    return image_bytes
 
-        logger.error("❌ No image data found in response")
-        logger.error(f"Checked {len(response.parts)} parts, none contained image data")
+            logger.error("❌ No image data found in response")
+            logger.error(f"Checked {len(response.parts)} parts, none contained image data")
+        else:
+            logger.error("❌ Response has no parts (parts is None)")
 
         # Collect all text from response for debugging
         response_text = ""
-        for part in response.parts:
-            if part.text is not None:
-                response_text += part.text
+        if response.parts is not None:
+            for part in response.parts:
+                if part.text is not None:
+                    response_text += part.text
 
-        if response_text:
-            logger.error("⚠️ Response contained only text, no image:")
-            logger.error(f"{response_text[:500]}")
+            if response_text:
+                logger.error("⚠️ Response contained only text, no image:")
+                logger.error(f"{response_text[:500]}")
 
-        raise ValueError(f"No image data found in response. Response had {len(response.parts)} parts. Text: {response_text[:200] if response_text else 'none'}")
+            raise ValueError(f"No image data found in response. Response had {len(response.parts)} parts. Text: {response_text[:200] if response_text else 'none'}")
+        else:
+            raise ValueError("No image data found in response. Response.parts is None (likely blocked by safety filters or API error)")
 
     except Exception as e:
         logger.exception(f"❌ Exception in generate_image: {type(e).__name__}: {str(e)}")
