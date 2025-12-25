@@ -31,10 +31,20 @@
         .book-content p { margin-bottom: 1.5em; text-align: justify; }
 
         /* Navigation Footer */
-        .chapter-nav { display: flex; justify-content: space-between; margin-top: 60px; padding-top: 20px; border-top: 1px solid #eee; font-family: -apple-system, sans-serif; }
-        .nav-btn { text-decoration: none; color: #3498db; font-weight: bold; padding: 10px 20px; border: 1px solid #3498db; border-radius: 4px; transition: all 0.2s; }
+        .chapter-nav { display: flex; justify-content: space-between; align-items: center; margin-top: 60px; padding-top: 20px; border-top: 1px solid #eee; font-family: -apple-system, sans-serif; }
+        .nav-btn { text-decoration: none; color: #3498db; font-weight: bold; padding: 10px 20px; border: 1px solid #3498db; border-radius: 4px; transition: all 0.2s; cursor: pointer; }
         .nav-btn:hover { background: #3498db; color: white; }
         .nav-btn.disabled { opacity: 0.5; pointer-events: none; border-color: #ccc; color: #ccc; }
+        .nav-btn.loading { opacity: 0.6; cursor: wait; }
+        
+        /* Illustration Controls */
+        .illustration-controls { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 20px; }
+        .illustration-btn { background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-family: -apple-system, sans-serif; }
+        .illustration-btn:hover { background: #218838; }
+        .illustration-btn:disabled { background: #6c757d; cursor: not-allowed; }
+        .illustration-status { font-size: 0.9em; color: #666; }
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #f3f3f3; border-top: 2px solid #3498db; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
     </style>
 </head>
@@ -97,6 +107,14 @@
     <!-- MAIN CONTENT -->
     <div id="main">
         <div class="content-container">
+            <!-- Illustration Controls at Top -->
+            <div class="illustration-controls" style="margin-bottom: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px;">
+                <button id="generate-illustrations-btn" class="illustration-btn" onclick="generateIllustrations()">
+                    <span id="illustration-btn-text">Generate Illustrations</span>
+                </button>
+                <div id="illustration-status" class="illustration-status"></div>
+            </div>
+            
             <div class="book-content">
                 {{ current_chapter.content | safe }}
             </div>
@@ -149,6 +167,115 @@
                 console.log("Could not find index for", filename);
             }
         }
+
+        // Illustration generation
+        const bookId = "{{ book_id }}";
+        const chapterIndex = {{ chapter_index }};
+        const hasIllustrations = {{ 'true' if has_illustrations else 'false' }};
+
+        // Check illustration status on load
+        async function checkIllustrationStatus() {
+            console.log('[DEBUG] Checking illustration status for chapter', chapterIndex);
+            try {
+                const response = await fetch(`/read/${bookId}/${chapterIndex}/illustration-status`);
+                console.log('[DEBUG] Status response:', response.status, response.statusText);
+                const data = await response.json();
+                console.log('[DEBUG] Status data:', JSON.stringify(data, null, 2));
+                
+                const statusDiv = document.getElementById('illustration-status');
+                const btn = document.getElementById('generate-illustrations-btn');
+                
+                if (data.has_illustrations) {
+                    statusDiv.textContent = `✓ ${data.image_count} illustrations available`;
+                    btn.textContent = 'Regenerate Illustrations';
+                } else {
+                    statusDiv.textContent = 'No illustrations yet';
+                }
+            } catch (error) {
+                console.error('[DEBUG] Error checking illustration status:', error);
+            }
+        }
+
+        async function generateIllustrations() {
+            console.log('[DEBUG] ===== Starting illustration generation =====');
+            console.log('[DEBUG] Book ID:', bookId);
+            console.log('[DEBUG] Chapter Index:', chapterIndex);
+            
+            const btn = document.getElementById('generate-illustrations-btn');
+            const btnText = document.getElementById('illustration-btn-text');
+            const statusDiv = document.getElementById('illustration-status');
+            
+            // Disable button and show loading
+            btn.disabled = true;
+            btnText.innerHTML = '<span class="spinner"></span>Generating...';
+            statusDiv.textContent = 'Generating illustrations (this may take a minute)...';
+            
+            try {
+                const url = `/read/${bookId}/${chapterIndex}/generate-illustrations`;
+                console.log('[DEBUG] POST request to:', url);
+                
+                const response = await fetch(url, {
+                    method: 'POST'
+                });
+                
+                console.log('[DEBUG] Response status:', response.status, response.statusText);
+                console.log('[DEBUG] Response headers:', Object.fromEntries(response.headers.entries()));
+                
+                const responseData = await response.json().catch(async () => {
+                    const text = await response.text();
+                    return { text };
+                });
+                console.log('[DEBUG] Response data:', JSON.stringify(responseData, null, 2));
+                
+                if (response.ok) {
+                    console.log('[DEBUG] Generation started, beginning polling...');
+                    // Poll for completion
+                    let attempts = 0;
+                    const maxAttempts = 60; // 60 seconds max
+                    
+                    const pollInterval = setInterval(async () => {
+                        attempts++;
+                        console.log(`[DEBUG] Polling attempt ${attempts}/${maxAttempts}`);
+                        try {
+                            const statusResponse = await fetch(`/read/${bookId}/${chapterIndex}/illustration-status`);
+                            const statusData = await statusResponse.json();
+                            console.log(`[DEBUG] Poll ${attempts} - Status:`, JSON.stringify(statusData, null, 2));
+                            
+                            if (statusData.has_illustrations) {
+                                console.log('[DEBUG] ✓ Illustrations found! Stopping poll.');
+                                clearInterval(pollInterval);
+                                statusDiv.textContent = '✓ Illustrations generated! Refreshing page...';
+                                // Refresh page after a short delay
+                                setTimeout(() => {
+                                    window.location.reload();
+                                }, 1000);
+                            } else if (attempts >= maxAttempts) {
+                                console.log('[DEBUG] Max attempts reached, stopping poll.');
+                                clearInterval(pollInterval);
+                                btn.disabled = false;
+                                btnText.textContent = 'Generate Illustrations';
+                                statusDiv.textContent = 'Generation taking longer than expected. Please refresh the page in a moment.';
+                            }
+                        } catch (error) {
+                            console.error('[DEBUG] Error polling status:', error);
+                        }
+                    }, 1000);
+                } else {
+                    console.error('[DEBUG] Response not OK:', response.status, responseData);
+                    throw new Error(`Failed to start generation: ${response.status} - ${JSON.stringify(responseData)}`);
+                }
+            } catch (error) {
+                console.error('[DEBUG] ===== Error generating illustrations =====');
+                console.error('[DEBUG] Error details:', error);
+                console.error('[DEBUG] Error stack:', error.stack);
+                btn.disabled = false;
+                btnText.textContent = 'Generate Illustrations';
+                statusDiv.textContent = 'Error: ' + error.message;
+            }
+        }
+
+        // Check status on page load
+        checkIllustrationStatus();
     </script>
 </body>
 </html>

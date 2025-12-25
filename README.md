@@ -22,6 +22,23 @@ uv run server.py
 
 And visit [localhost:8123](http://localhost:8123/) to see your current Library. You can easily add more books, or delete them from your library by deleting the folder. It's not supposed to be complicated or complex.
 
+## AI Illustration Generation
+
+The reader includes an optional feature to automatically generate illustrations for chapters using Google's Gemini API (Nano Banana for image generation).
+
+### Setup
+
+1. Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+
+2. Set the API key as an environment variable:
+   ```bash
+   export GEMINI_API_KEY=your_api_key_here
+   ```
+
+3. When you open a chapter, illustrations will be automatically generated in the background. You can also manually trigger generation using the "Generate Illustrations" button.
+
+The generated images are cached locally in the book's `images/` directory, so they won't be regenerated unless you click "Regenerate Illustrations".
+
 ## License
 
 MIT
