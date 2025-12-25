@@ -16,6 +16,11 @@ from illustration_generator import (
     inject_images_into_html,
     summarize_scenes
 )
+from tts_generator import (
+    generate_tts_for_paragraph,
+    get_cached_audio,
+    generate_paragraph_hash
+)
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -100,7 +105,7 @@ def get_chapter_with_images(book_id: str, chapter_index: int, chapter_content: s
 
 
 @app.get("/read/{book_id}/{chapter_index}", response_class=HTMLResponse)
-async def read_chapter(request: Request, book_id: str, chapter_index: int, background_tasks: BackgroundTasks, auto_generate: bool = True):
+async def read_chapter(request: Request, book_id: str, chapter_index: int, background_tasks: BackgroundTasks, auto_generate: bool = False):
     """The main reader interface."""
     book = load_book_cached(book_id)
     if not book:
@@ -110,15 +115,16 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int, backg
         raise HTTPException(status_code=404, detail="Chapter not found")
 
     current_chapter = book.spine[chapter_index]
-    
-    # Check if images exist, if not and auto_generate is True, trigger generation in background
+
+    # Check if images exist
     cached_images = get_cached_images(book_id, chapter_index)
     has_images = cached_images is not None
-    
+
     # Inject images if available
     chapter_html = get_chapter_with_images(book_id, chapter_index, current_chapter.content)
-    
-    # If no images and auto_generate, start generation in background
+
+    # Auto-generation is disabled by default - user must click the button to generate
+    # If auto_generate query param is explicitly set to true, generate in background
     if not has_images and auto_generate:
         # Trigger background generation (non-blocking)
         background_tasks.add_task(
@@ -157,11 +163,11 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int, backg
 
 @app.post("/read/{book_id}/{chapter_index}/generate-illustrations")
 async def generate_illustrations_endpoint(book_id: str, chapter_index: int, background_tasks: BackgroundTasks):
-    """Manually trigger illustration generation for a chapter."""
+    """Manually trigger illustration generation for a chapter (force regenerate)."""
     print(f"[DEBUG] ===== POST /generate-illustrations endpoint called ======")
     print(f"[DEBUG] Book ID: {book_id}")
     print(f"[DEBUG] Chapter Index: {chapter_index}")
-    
+
     book = load_book_cached(book_id)
     if not book:
         print(f"[DEBUG] ERROR: Book not found")
@@ -174,22 +180,23 @@ async def generate_illustrations_endpoint(book_id: str, chapter_index: int, back
     current_chapter = book.spine[chapter_index]
     print(f"[DEBUG] Chapter found: {current_chapter.title}")
     print(f"[DEBUG] Chapter text length: {len(current_chapter.text)} chars")
-    
-    # Trigger generation in background
-    print(f"[DEBUG] Adding background task for illustration generation...")
+
+    # Trigger generation in background with force_regenerate=True
+    print(f"[DEBUG] Adding background task for illustration generation (force regenerate)...")
     background_tasks.add_task(
         generate_illustrations_for_chapter,
         book_id,
         chapter_index,
         current_chapter.text,
         book.metadata.title,  # Pass book title for thematic context
-        current_chapter.title  # Pass chapter title for filename
+        current_chapter.title,  # Pass chapter title for filename
+        True  # force_regenerate=True
     )
     print(f"[DEBUG] Background task added successfully")
-    
+
     response_data = {
         "status": "generating",
-        "message": "Illustration generation started. Refresh the page in a few moments to see the images."
+        "message": "Illustration regeneration started. Refresh the page in a few moments to see the new images."
     }
     print(f"[DEBUG] Returning response: {response_data}")
     return JSONResponse(response_data)
@@ -221,6 +228,111 @@ async def serve_image(book_id: str, image_name: str):
         raise HTTPException(status_code=404, detail="Image not found")
 
     return FileResponse(img_path)
+
+
+# ============= TTS ENDPOINTS =============
+
+@app.post("/read/{book_id}/generate-tts")
+async def generate_tts_endpoint(
+    book_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks
+):
+    """Generate TTS audio for a paragraph."""
+    print(f"[TTS DEBUG] ===== POST /generate-tts endpoint called =====")
+    print(f"[TTS DEBUG] Book ID: {book_id}")
+
+    # Parse request body
+    body = await request.json()
+    paragraph_text = body.get("text", "")
+
+    if not paragraph_text:
+        print(f"[TTS ERROR] No text provided in request")
+        raise HTTPException(status_code=400, detail="No text provided")
+
+    print(f"[TTS DEBUG] Text length: {len(paragraph_text)} chars")
+
+    # Validate book exists
+    book = load_book_cached(book_id)
+    if not book:
+        print(f"[TTS ERROR] Book not found")
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    # Generate hash for paragraph
+    para_hash = generate_paragraph_hash(paragraph_text)
+    print(f"[TTS DEBUG] Paragraph hash: {para_hash}")
+
+    # Check cache first
+    cached = get_cached_audio(book_id, para_hash)
+    if cached:
+        print(f"[TTS DEBUG] Audio already cached: {cached}")
+        return JSONResponse({
+            "status": "cached",
+            "audio_path": cached,
+            "para_hash": para_hash
+        })
+
+    # Trigger background generation
+    print(f"[TTS DEBUG] Adding background task for TTS generation...")
+    background_tasks.add_task(
+        generate_tts_for_paragraph,
+        book_id,
+        paragraph_text
+    )
+    print(f"[TTS DEBUG] Background task added successfully")
+
+    response_data = {
+        "status": "generating",
+        "para_hash": para_hash
+    }
+    print(f"[TTS DEBUG] Returning response: {response_data}")
+    return JSONResponse(response_data)
+
+
+@app.get("/read/{book_id}/audio/{audio_name}")
+async def serve_audio(book_id: str, audio_name: str):
+    """
+    Serve audio files for TTS playback.
+    Similar to serve_image but for audio files.
+    """
+    print(f"[TTS DEBUG] Serving audio: {book_id}/{audio_name}")
+
+    # Security: sanitize paths to prevent directory traversal
+    safe_book_id = os.path.basename(book_id)
+    safe_audio_name = os.path.basename(audio_name)
+
+    audio_path = os.path.join(BOOKS_DIR, safe_book_id, "audio", safe_audio_name)
+
+    if not os.path.exists(audio_path):
+        print(f"[TTS ERROR] Audio file not found: {audio_path}")
+        raise HTTPException(status_code=404, detail="Audio not found")
+
+    print(f"[TTS DEBUG] Serving audio file: {audio_path}")
+    return FileResponse(
+        audio_path,
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "public, max-age=31536000",  # Cache for 1 year
+            "Accept-Ranges": "bytes"  # Enable range requests for seeking
+        }
+    )
+
+
+@app.get("/read/{book_id}/tts-status/{para_hash}")
+async def tts_status(book_id: str, para_hash: str):
+    """Check TTS generation status for a paragraph."""
+    print(f"[TTS DEBUG] Checking TTS status for hash: {para_hash}")
+
+    cached = get_cached_audio(book_id, para_hash)
+    is_ready = cached is not None
+
+    print(f"[TTS DEBUG] Status - Ready: {is_ready}, Path: {cached}")
+
+    return JSONResponse({
+        "ready": is_ready,
+        "audio_path": cached if cached else None
+    })
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -5,13 +5,24 @@ Module for generating AI illustrations for ebook chapters using Gemini API.
 import os
 import json
 import base64
+import traceback
 from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
+from loguru import logger
 
 try:
     from google import genai
 except ImportError:
     genai = None
+
+# Configure loguru
+logger.remove()  # Remove default handler
+logger.add(
+    lambda msg: print(msg, end=""),  # Print to stdout
+    format="<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+    colorize=True,
+    level="DEBUG"
+)
 
 
 def sanitize_chapter_title(title: str, max_length: int = 50) -> str:
@@ -75,7 +86,7 @@ def get_gemini_client():
 def summarize_scenes(chapter_text: str) -> List[Dict]:
     """
     Sends chapter text to Gemini 3.0 Flash asking for 3 main scene summaries.
-    
+
     Returns list of scene dicts with:
     - summary: str - summary of the scene
     - location_in_text: int - approximate character position (0-100 percentage)
@@ -83,10 +94,10 @@ def summarize_scenes(chapter_text: str) -> List[Dict]:
     """
     if not chapter_text or len(chapter_text.strip()) == 0:
         return []
-    
+
     client = get_gemini_client()
-    
-    prompt = f"""Analyze the following chapter from a book and identify the 3 most important scenes. 
+
+    prompt = f"""Analyze the following chapter from a book and identify the 3 most important scenes.
 For each scene, provide:
 1. A brief summary (2-3 sentences)
 2. An approximate location in the text (as a percentage: 0-100, where 0 is the beginning and 100 is the end)
@@ -115,49 +126,49 @@ Format your response as JSON with this structure:
 Chapter text:
 {chapter_text[:50000]}  # Limit to 50k chars to avoid token limits
 """
-    
-    print(f"[DEBUG] ===== summarize_scenes: Sending request to Gemini ======")
-    print(f"[DEBUG] Chapter text length: {len(chapter_text)} chars (sending first 50000)")
-    print(f"[DEBUG] Model: gemini-2.0-flash-exp")
-    print(f"[DEBUG] Prompt length: {len(prompt)} chars")
-    
+
+    logger.info("📝 Sending scene analysis request to Gemini")
+    logger.debug(f"Chapter text length: {len(chapter_text)} chars (sending first 50000)")
+    logger.debug(f"Model: gemini-2.0-flash-exp")
+    logger.debug(f"Prompt length: {len(prompt)} chars")
+
     try:
         response = client.models.generate_content(
             model="gemini-2.0-flash-exp",
-            contents=prompt
+            contents=[prompt]
         )
-        
-        print(f"[DEBUG] Response received from Gemini")
-        print(f"[DEBUG] Response type: {type(response)}")
-        print(f"[DEBUG] Response parts count: {len(response.parts) if hasattr(response, 'parts') else 'N/A'}")
+
+        logger.success("✅ Response received from Gemini")
+        logger.debug(f"Response type: {type(response)}")
+        logger.debug(f"Response parts count: {len(response.parts) if hasattr(response, 'parts') else 'N/A'}")
         
         # Extract text response
         response_text = ""
         for i, part in enumerate(response.parts):
-            print(f"[DEBUG] Part {i}: type={type(part)}, has text={hasattr(part, 'text')}")
+            logger.trace(f"Part {i}: type={type(part)}, has text={hasattr(part, 'text')}")
             if hasattr(part, 'text') and part.text:
                 response_text += part.text
-                print(f"[DEBUG] Part {i} text length: {len(part.text)} chars")
-        
-        print(f"[DEBUG] Full response text length: {len(response_text)} chars")
-        print(f"[DEBUG] Response text (first 1000 chars): {response_text[:1000]}")
-        
+                logger.trace(f"Part {i} text length: {len(part.text)} chars")
+
+        logger.debug(f"Full response text length: {len(response_text)} chars")
+        logger.trace(f"Response text (first 1000 chars): {response_text[:1000]}")
+
         # Parse JSON response
         # Sometimes Gemini wraps JSON in markdown code blocks
         response_text = response_text.strip()
         if response_text.startswith("```"):
-            print(f"[DEBUG] Response wrapped in code block, extracting JSON...")
+            logger.debug("Response wrapped in code block, extracting JSON...")
             # Extract JSON from code block
             lines = response_text.split("\n")
             response_text = "\n".join(lines[1:-1]) if len(lines) > 2 else response_text
-            print(f"[DEBUG] Extracted JSON length: {len(response_text)} chars")
-        
-        print(f"[DEBUG] Attempting to parse JSON...")
+            logger.debug(f"Extracted JSON length: {len(response_text)} chars")
+
+        logger.debug("Attempting to parse JSON...")
         data = json.loads(response_text)
-        print(f"[DEBUG] JSON parsed successfully")
+        logger.success("✅ JSON parsed successfully")
         scenes = data.get("scenes", [])
-        print(f"[DEBUG] Found {len(scenes)} scenes in response")
-        
+        logger.info(f"Found {len(scenes)} scenes in response")
+
         # Ensure we have exactly 3 scenes, pad if needed
         while len(scenes) < 3:
             scenes.append({
@@ -165,31 +176,27 @@ Chapter text:
                 "summary": "A scene from the chapter",
                 "location_percent": 33 * len(scenes)
             })
-        
-        print(f"[DEBUG] Returning {len(scenes[:3])} scenes")
+
+        logger.info(f"Returning {len(scenes[:3])} scenes")
         for i, scene in enumerate(scenes[:3]):
-            print(f"[DEBUG] Scene {i+1}: number={scene.get('scene_number')}, location={scene.get('location_percent')}%, summary_length={len(scene.get('summary', ''))}")
-        
+            logger.debug(f"Scene {i+1}: number={scene.get('scene_number')}, location={scene.get('location_percent')}%, summary_length={len(scene.get('summary', ''))}")
+
         return scenes[:3]  # Return only first 3
-        
+
     except json.JSONDecodeError as e:
-        print(f"[DEBUG] ===== ERROR: JSON parsing failed ======")
-        print(f"[DEBUG] Error: {e}")
-        print(f"[DEBUG] Response text (first 2000 chars): {response_text[:2000]}")
-        print(f"[DEBUG] Full response text length: {len(response_text)}")
+        logger.error("❌ JSON parsing failed")
+        logger.error(f"Error: {e}")
+        logger.debug(f"Response text (first 2000 chars): {response_text[:2000]}")
+        logger.debug(f"Full response text length: {len(response_text)}")
         # Fallback: create generic scenes
-        print(f"[DEBUG] Using fallback scenes")
+        logger.warning("⚠️ Using fallback scenes")
         return [
             {"scene_number": 1, "summary": "An important scene from the chapter", "location_percent": 25},
             {"scene_number": 2, "summary": "Another important scene from the chapter", "location_percent": 50},
             {"scene_number": 3, "summary": "A third important scene from the chapter", "location_percent": 75},
         ]
     except Exception as e:
-        print(f"[DEBUG] ===== ERROR: Exception in summarize_scenes ======")
-        print(f"[DEBUG] Error type: {type(e).__name__}")
-        print(f"[DEBUG] Error message: {str(e)}")
-        import traceback
-        print(f"[DEBUG] Traceback:\n{traceback.format_exc()}")
+        logger.exception(f"❌ Exception in summarize_scenes: {type(e).__name__}: {str(e)}")
         raise
 
 
@@ -216,8 +223,8 @@ The image should be:
 
 Generate a beautiful illustration that captures the essence of this scene."""
 
-    print(f"[DEBUG] Created image prompt (length: {len(prompt)} chars)")
-    print(f"[DEBUG] Prompt preview: {prompt[:200]}...")
+    logger.debug(f"Created image prompt (length: {len(prompt)} chars)")
+    logger.trace(f"Prompt preview: {prompt[:200]}...")
 
     return prompt
 
@@ -225,78 +232,93 @@ Generate a beautiful illustration that captures the essence of this scene."""
 def generate_image(prompt: str) -> bytes:
     """
     Uses Nano Banana API (gemini-2.5-flash-image model) to generate image bytes.
-    
+
     Returns image bytes (PNG format).
     """
-    print(f"[DEBUG] ===== generate_image: Starting image generation ======")
-    print(f"[DEBUG] Model: gemini-2.5-flash-image")
-    print(f"[DEBUG] Prompt length: {len(prompt)} chars")
-    
+    logger.info("🎨 Starting image generation")
+    logger.debug(f"Model: gemini-2.5-flash-image")
+    logger.debug(f"Prompt length: {len(prompt)} chars")
+
     client = get_gemini_client()
-    
+
     try:
-        print(f"[DEBUG] Sending request to Gemini...")
+        logger.info("📤 Sending request to Gemini Image API...")
         response = client.models.generate_content(
             model="gemini-2.5-flash-image",
-            contents=prompt
+            contents=[prompt]
         )
-        
-        print(f"[DEBUG] Response received from Gemini")
-        print(f"[DEBUG] Response type: {type(response)}")
-        print(f"[DEBUG] Response parts count: {len(response.parts) if hasattr(response, 'parts') else 'N/A'}")
-        
-        # Extract image bytes from response
+
+        logger.success("✅ Response received from Gemini")
+        logger.debug(f"Response type: {type(response)}")
+
+        # Log all response attributes for debugging
+        logger.trace(f"Response attributes: {dir(response)}")
+
+        # Try to access the raw response
+        if hasattr(response, '_raw_response'):
+            logger.debug(f"Raw response: {response._raw_response}")
+
+        logger.debug(f"Response parts count: {len(response.parts) if hasattr(response, 'parts') else 'N/A'}")
+
+        # Check for error or safety information in response
+        if hasattr(response, 'prompt_feedback'):
+            logger.warning(f"⚠️ Prompt feedback: {response.prompt_feedback}")
+        if hasattr(response, 'candidates') and response.candidates:
+            for i, candidate in enumerate(response.candidates):
+                if hasattr(candidate, 'finish_reason'):
+                    logger.info(f"Candidate {i} finish_reason: {candidate.finish_reason}")
+                if hasattr(candidate, 'safety_ratings'):
+                    logger.info(f"Candidate {i} safety_ratings: {candidate.safety_ratings}")
+
+        # Extract image bytes from response (following official Gemini API pattern)
         for i, part in enumerate(response.parts):
-            print(f"[DEBUG] Processing part {i}: type={type(part)}")
-            print(f"[DEBUG] Part {i} attributes: {dir(part)}")
+            logger.debug(f"Processing part {i}: type={type(part)}")
 
-            # Primary method: try inline_data first (most reliable for Gemini image responses)
-            if hasattr(part, 'inline_data') and part.inline_data:
-                print(f"[DEBUG] Part {i} has inline_data attribute")
-                print(f"[DEBUG] inline_data type: {type(part.inline_data)}")
-                print(f"[DEBUG] inline_data attributes: {dir(part.inline_data)}")
-                try:
-                    # inline_data.data might be base64 encoded or raw bytes
-                    data = part.inline_data.data
-                    print(f"[DEBUG] inline_data.data type: {type(data)}")
+            # Check for text response (likely an error message)
+            if part.text is not None:
+                logger.warning(f"⚠️ Part {i} contains text instead of image:")
+                logger.error(f"Text content: {part.text}")
+                continue
 
-                    if isinstance(data, bytes):
-                        # If it's already bytes, use directly
-                        print(f"[DEBUG] Data is bytes, length: {len(data)} bytes")
-                        return data
-                    elif isinstance(data, str):
-                        # If it's a string, it's likely base64
-                        print(f"[DEBUG] Data is string (length: {len(data)}), decoding as base64...")
-                        image_bytes = base64.b64decode(data)
-                        print(f"[DEBUG] Decoded to {len(image_bytes)} bytes")
-                        return image_bytes
-                    else:
-                        print(f"[DEBUG] Unexpected data type: {type(data)}")
-                except Exception as e:
-                    print(f"[DEBUG] Error processing inline_data: {type(e).__name__}: {e}")
-                    import traceback
-                    print(f"[DEBUG] Traceback:\n{traceback.format_exc()}")
+            # Check for image data using the official as_image() method
+            if part.inline_data is not None:
+                logger.debug(f"✓ Part {i} has inline_data, extracting image")
 
-            # Fallback: try text field (might be base64 encoded image)
-            if hasattr(part, 'text') and part.text:
-                print(f"[DEBUG] Part {i} has text field, trying as base64...")
-                try:
-                    image_bytes = base64.b64decode(part.text)
-                    print(f"[DEBUG] Successfully decoded text as base64: {len(image_bytes)} bytes")
-                    return image_bytes
-                except Exception as e:
-                    print(f"[DEBUG] Text field is not base64 image data: {type(e).__name__}")
-        
-        print(f"[DEBUG] ===== ERROR: No image data found in response ======")
-        print(f"[DEBUG] Checked {len(response.parts)} parts, none contained image data")
-        raise ValueError("No image data found in response")
-        
+                # Use the official as_image() method (returns PIL Image)
+                image = part.as_image()._pil_image
+                logger.debug(f"Image type: {type(image)}")
+
+                # Convert PIL Image to PNG bytes
+                import io
+                img_byte_arr = io.BytesIO()
+                image.save(img_byte_arr, format='PNG')
+                image_bytes = img_byte_arr.getvalue()
+                logger.success(f"✅ Got image using as_image(), length: {len(image_bytes)} bytes")
+
+                # Validate size
+                if len(image_bytes) < 1000:
+                    logger.warning(f"⚠️ Suspiciously small image: {len(image_bytes)} bytes")
+                    raise ValueError(f"Image too small: {len(image_bytes)} bytes")
+
+                return image_bytes
+
+        logger.error("❌ No image data found in response")
+        logger.error(f"Checked {len(response.parts)} parts, none contained image data")
+
+        # Collect all text from response for debugging
+        response_text = ""
+        for part in response.parts:
+            if part.text is not None:
+                response_text += part.text
+
+        if response_text:
+            logger.error("⚠️ Response contained only text, no image:")
+            logger.error(f"{response_text[:500]}")
+
+        raise ValueError(f"No image data found in response. Response had {len(response.parts)} parts. Text: {response_text[:200] if response_text else 'none'}")
+
     except Exception as e:
-        print(f"[DEBUG] ===== ERROR: Exception in generate_image ======")
-        print(f"[DEBUG] Error type: {type(e).__name__}")
-        print(f"[DEBUG] Error message: {str(e)}")
-        import traceback
-        print(f"[DEBUG] Traceback:\n{traceback.format_exc()}")
+        logger.exception(f"❌ Exception in generate_image: {type(e).__name__}: {str(e)}")
         raise
 
 
@@ -315,6 +337,28 @@ def save_image(image_bytes: bytes, book_id: str, chapter_index: int, scene_numbe
     Returns:
         Relative path to the saved image
     """
+    # Validate image bytes
+    if not image_bytes or len(image_bytes) < 1000:
+        raise ValueError(f"Invalid image data: only {len(image_bytes)} bytes (expected at least 1000 bytes for a valid PNG)")
+
+    logger.debug(f"Validating image data: {len(image_bytes)} bytes")
+
+    # Basic PNG validation - check for PNG header
+    PNG_HEADER = b'\x89PNG\r\n\x1a\n'
+    if not image_bytes.startswith(PNG_HEADER):
+        logger.warning(f"⚠️ Image data does not start with PNG header")
+        logger.debug(f"First 16 bytes: {image_bytes[:16]}")
+        # Try to detect if it's a base64-encoded string that wasn't decoded
+        try:
+            decoded = base64.b64decode(image_bytes)
+            if decoded.startswith(PNG_HEADER):
+                logger.info("✓ Image was double-encoded, using decoded version")
+                image_bytes = decoded
+            else:
+                raise ValueError(f"Image data is not a valid PNG (header: {image_bytes[:16]})")
+        except:
+            raise ValueError(f"Image data is not a valid PNG (header: {image_bytes[:16]})")
+
     # Ensure images directory exists
     images_dir = os.path.join(book_id, "images")
     os.makedirs(images_dir, exist_ok=True)
@@ -329,6 +373,7 @@ def save_image(image_bytes: bytes, book_id: str, chapter_index: int, scene_numbe
     filepath = os.path.join(images_dir, filename)
 
     # Save image
+    logger.success(f"💾 Saving valid PNG image to: {filepath}")
     with open(filepath, "wb") as f:
         f.write(image_bytes)
 
@@ -406,7 +451,7 @@ def save_image_metadata(book_id: str, chapter_index: int, image_paths: List[str]
         json.dump(metadata, f, indent=2)
 
 
-def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter_text: str, book_title: str = "", chapter_title: str = "") -> List[str]:
+def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter_text: str, book_title: str = "", chapter_title: str = "", force_regenerate: bool = False) -> List[str]:
     """
     Main function to generate illustrations for a chapter.
 
@@ -416,63 +461,121 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
         chapter_text: Full text content of the chapter
         book_title: Title of the book for thematic context in image generation
         chapter_title: Title of the chapter for filename generation
+        force_regenerate: If True, regenerate images even if cached versions exist
 
     Returns:
         List of image paths (relative to book directory)
     """
-    print(f"[DEBUG] ===== generate_illustrations_for_chapter ======")
-    print(f"[DEBUG] Book ID: {book_id}")
-    print(f"[DEBUG] Book Title: {book_title}")
-    print(f"[DEBUG] Chapter Index: {chapter_index}")
-    print(f"[DEBUG] Chapter Title: {chapter_title}")
-    print(f"[DEBUG] Chapter text length: {len(chapter_text)} chars")
+    logger.info("=" * 60)
+    logger.info("🎬 STARTING ILLUSTRATION GENERATION")
+    logger.info("=" * 60)
+    logger.info(f"Book ID: {book_id}")
+    logger.info(f"Book Title: {book_title}")
+    logger.info(f"Chapter Index: {chapter_index}")
+    logger.info(f"Chapter Title: {chapter_title}")
+    logger.debug(f"Chapter text length: {len(chapter_text)} chars")
+    logger.info(f"Force regenerate: {force_regenerate}")
 
-    # Check cache first
-    cached = get_cached_images(book_id, chapter_index)
-    if cached:
-        print(f"[DEBUG] Found cached images: {cached}")
-        return cached
+    # Check cache first (unless force_regenerate is True)
+    if not force_regenerate:
+        cached = get_cached_images(book_id, chapter_index)
+        if cached:
+            logger.success(f"✅ Found cached images: {cached}")
+            return cached
 
-    print(f"[DEBUG] No cached images, generating new ones...")
+    if force_regenerate:
+        logger.warning("🗑️  Force regenerate enabled, deleting old images...")
+        # Delete old cached images if they exist
+        metadata_file = os.path.join(book_id, "generated_images.json")
+        if os.path.exists(metadata_file):
+            try:
+                with open(metadata_file, "r") as f:
+                    metadata = json.load(f)
+                chapter_key = str(chapter_index)
+                if chapter_key in metadata:
+                    # Get old image paths
+                    chapter_data = metadata[chapter_key]
+                    if isinstance(chapter_data, list):
+                        old_paths = chapter_data
+                    elif isinstance(chapter_data, dict) and "images" in chapter_data:
+                        old_paths = chapter_data["images"]
+                    else:
+                        old_paths = []
+
+                    # Delete old image files
+                    for img_path in old_paths:
+                        full_path = os.path.join(book_id, img_path)
+                        if os.path.exists(full_path):
+                            os.remove(full_path)
+                            logger.info(f"🗑️  Deleted old image: {full_path}")
+
+                    # Remove chapter from metadata so get_cached_images() returns None during regeneration
+                    del metadata[chapter_key]
+                    with open(metadata_file, "w") as f:
+                        json.dump(metadata, f, indent=2)
+                    logger.info(f"✅ Removed chapter {chapter_key} from metadata")
+            except Exception as e:
+                logger.error(f"❌ Error cleaning up old images: {e}")
+
+    logger.info("🆕 Generating new images...")
 
     # Generate scenes
-    print(f"[DEBUG] Step 1: Summarizing scenes...")
+    logger.info("📋 Step 1: Summarizing scenes...")
     scenes = summarize_scenes(chapter_text)
-    print(f"[DEBUG] Got {len(scenes)} scenes")
+    logger.success(f"✅ Got {len(scenes)} scenes")
 
     image_paths = []
     scene_locations = []
 
     for i, scene in enumerate(scenes):
-        print(f"[DEBUG] ===== Processing Scene {i+1}/{len(scenes)} ======")
+        logger.info("=" * 60)
+        logger.info(f"🎨 Processing Scene {i+1}/{len(scenes)}")
+        logger.info("=" * 60)
         scene_num = scene["scene_number"]
         scene_summary = scene["summary"]
         scene_location = scene.get("location_percent", 33 * (scene_num - 1))
         scene_locations.append(scene_location)
 
-        print(f"[DEBUG] Scene {i+1} summary: {scene_summary[:100]}...")
-        print(f"[DEBUG] Scene {i+1} location: {scene_location}%")
+        logger.info(f"Summary: {scene_summary[:100]}...")
+        logger.info(f"Location: {scene_location}%")
 
-        # Create image prompt
-        print(f"[DEBUG] Step 2: Creating image prompt for scene {i+1}...")
-        prompt = create_image_prompt(scene_summary, book_title)
+        try:
+            # Create image prompt
+            logger.info(f"📝 Step 2: Creating image prompt for scene {i+1}...")
+            prompt = create_image_prompt(scene_summary, book_title)
 
-        # Generate image
-        print(f"[DEBUG] Step 3: Generating image for scene {i+1}...")
-        image_bytes = generate_image(prompt)
-        print(f"[DEBUG] Generated image: {len(image_bytes)} bytes")
+            # Generate image
+            logger.info(f"🎨 Step 3: Generating image for scene {i+1}...")
+            image_bytes = generate_image(prompt)
+            logger.info(f"Generated image: {len(image_bytes)} bytes")
 
-        # Save image
-        print(f"[DEBUG] Step 4: Saving image for scene {i+1}...")
-        img_path = save_image(image_bytes, book_id, chapter_index, scene_num, chapter_title)
-        print(f"[DEBUG] Saved image to: {img_path}")
-        image_paths.append(img_path)
+            # Validate before saving
+            if len(image_bytes) < 1000:
+                raise ValueError(f"Image too small: {len(image_bytes)} bytes - likely an error response")
+
+            # Save image
+            logger.info(f"💾 Step 4: Saving image for scene {i+1}...")
+            img_path = save_image(image_bytes, book_id, chapter_index, scene_num, chapter_title)
+            logger.success(f"✅ Saved image to: {img_path}")
+            image_paths.append(img_path)
+
+        except Exception as e:
+            logger.error("=" * 60)
+            logger.error(f"❌ ERROR processing scene {i+1}")
+            logger.error("=" * 60)
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Error message: {str(e)}")
+            logger.exception("Full traceback:")
+            # Re-raise to stop generation - we don't want partial results
+            raise Exception(f"Failed to generate image for scene {i+1}: {str(e)}") from e
 
     # Save metadata with scene locations
-    print(f"[DEBUG] Step 5: Saving metadata...")
+    logger.info("💾 Step 5: Saving metadata...")
     save_image_metadata(book_id, chapter_index, image_paths, scene_locations)
-    print(f"[DEBUG] ===== Generation complete! ======")
-    print(f"[DEBUG] Generated {len(image_paths)} images: {image_paths}")
+    logger.success("=" * 60)
+    logger.success("🎉 GENERATION COMPLETE!")
+    logger.success("=" * 60)
+    logger.success(f"Generated {len(image_paths)} images: {image_paths}")
 
     return image_paths
 

@@ -46,6 +46,95 @@
         .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #f3f3f3; border-top: 2px solid #3498db; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
+        /* TTS Play Button - Hidden by default, shown on paragraph hover */
+        .tts-paragraph-wrapper {
+            position: relative;
+            margin-bottom: 1.5em;
+            padding-right: 40px;  /* Make room for button and extend hover zone */
+            margin-right: -40px;  /* Compensate for padding to maintain text alignment */
+        }
+
+        .tts-paragraph-wrapper p {
+            margin-bottom: 0;  /* Remove margin since wrapper handles it */
+        }
+
+        .tts-paragraph-wrapper .tts-play-btn {
+            display: none;  /* Hidden until hover */
+            position: absolute;
+            right: 5px;  /* Position inside the wrapper's padding area */
+            top: 50%;
+            transform: translateY(-50%);
+            width: 28px;
+            height: 28px;
+            background: #3498db;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: all 0.2s ease;
+            z-index: 10;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .tts-paragraph-wrapper:hover .tts-play-btn {
+            display: flex;  /* Show on wrapper hover */
+        }
+
+        /* Keep button visible when loading or playing */
+        .tts-paragraph-wrapper .tts-play-btn.loading,
+        .tts-paragraph-wrapper .tts-play-btn.playing {
+            display: flex !important;  /* Always show when loading or playing */
+        }
+
+        .tts-play-btn:hover {
+            background: #2980b9;
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        /* Play icon (triangle) */
+        .tts-play-btn::before {
+            content: '';
+            width: 0;
+            height: 0;
+            border-left: 8px solid white;
+            border-top: 5px solid transparent;
+            border-bottom: 5px solid transparent;
+            margin-left: 2px;
+        }
+
+        /* Playing state (pause icon - two bars) */
+        .tts-play-btn.playing {
+            background: #e74c3c;
+        }
+
+        .tts-play-btn.playing::before {
+            content: '';
+            border: none;
+            width: 2.5px;
+            height: 10px;
+            background: white;
+            margin: 0;
+            margin-left: -5px;  /* Shift left to visually center the two-bar icon */
+            box-shadow: 4.5px 0 0 white;  /* Second bar created with box-shadow */
+            border-radius: 0.5px;  /* Slight rounding for smoother appearance */
+        }
+
+        /* Loading state */
+        .tts-play-btn.loading {
+            background: #95a5a6;
+        }
+
+        .tts-play-btn.loading::before {
+            content: '⋯';
+            border: none;
+            color: white;
+            font-size: 18px;
+            margin: 0;
+            width: auto;
+            height: auto;
+        }
+
     </style>
 </head>
 <body>
@@ -187,7 +276,10 @@
                 
                 if (data.has_illustrations) {
                     statusDiv.textContent = `✓ ${data.image_count} illustrations available`;
-                    btn.textContent = 'Regenerate Illustrations';
+                    const btnText = document.getElementById('illustration-btn-text');
+                    if (btnText) {
+                        btnText.textContent = 'Regenerate Illustrations';
+                    }
                 } else {
                     statusDiv.textContent = 'No illustrations yet';
                 }
@@ -231,7 +323,7 @@
                     console.log('[DEBUG] Generation started, beginning polling...');
                     // Poll for completion
                     let attempts = 0;
-                    const maxAttempts = 60; // 60 seconds max
+                    const maxAttempts = 180; // 180 seconds (3 minutes) - generation can take a while
                     
                     const pollInterval = setInterval(async () => {
                         attempts++;
@@ -240,9 +332,10 @@
                             const statusResponse = await fetch(`/read/${bookId}/${chapterIndex}/illustration-status`);
                             const statusData = await statusResponse.json();
                             console.log(`[DEBUG] Poll ${attempts} - Status:`, JSON.stringify(statusData, null, 2));
-                            
-                            if (statusData.has_illustrations) {
-                                console.log('[DEBUG] ✓ Illustrations found! Stopping poll.');
+
+                            // Check that we have all 3 illustrations (not just some)
+                            if (statusData.has_illustrations && statusData.image_count === 3) {
+                                console.log('[DEBUG] ✓ All 3 illustrations found! Stopping poll.');
                                 clearInterval(pollInterval);
                                 statusDiv.textContent = '✓ Illustrations generated! Refreshing page...';
                                 // Refresh page after a short delay
@@ -276,6 +369,221 @@
 
         // Check status on page load
         checkIllustrationStatus();
+
+        // ============= TTS FUNCTIONALITY =============
+
+        // TTS global state
+        const ttsCache = new Map();  // Map para_hash -> audio_path
+        let currentAudio = null;     // Current playing audio element
+
+        // Initialize TTS on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeTTS();
+        });
+
+        function initializeTTS() {
+            console.log('[TTS DEBUG] Initializing TTS for paragraphs...');
+
+            // Find all paragraphs in book content
+            const paragraphs = document.querySelectorAll('.book-content p');
+            console.log(`[TTS DEBUG] Found ${paragraphs.length} paragraphs`);
+
+            let buttonCount = 0;
+            paragraphs.forEach((para, index) => {
+                // Skip empty paragraphs
+                const text = para.textContent.trim();
+                if (!text || text.length < 10) {
+                    return;
+                }
+
+                // Skip if already wrapped (in case of re-initialization)
+                if (para.parentElement.classList.contains('tts-paragraph-wrapper')) {
+                    return;
+                }
+
+                // Create wrapper div
+                const wrapper = document.createElement('div');
+                wrapper.className = 'tts-paragraph-wrapper';
+
+                // Replace paragraph with wrapper, then put paragraph inside wrapper
+                para.parentNode.insertBefore(wrapper, para);
+                wrapper.appendChild(para);
+
+                // Create play button
+                const playBtn = document.createElement('button');
+                playBtn.className = 'tts-play-btn';
+                playBtn.setAttribute('title', 'Play audio');
+                playBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    handleTTSClick(playBtn, text);
+                };
+
+                // Add button to wrapper (not paragraph)
+                wrapper.appendChild(playBtn);
+                wrapper.setAttribute('data-tts-enabled', 'true');
+                buttonCount++;
+            });
+
+            console.log(`[TTS DEBUG] Added ${buttonCount} TTS buttons`);
+        }
+
+        // Generate hash for paragraph text (client-side)
+        async function generateSimpleHash(text) {
+            const encoder = new TextEncoder();
+            const data = encoder.encode(text);
+
+            // Use SHA-256 (MD5 not available in browsers, but we'll use first 16 chars)
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+            // Take first 16 characters to match backend MD5 length
+            return hashHex.substring(0, 16);
+        }
+
+        async function handleTTSClick(button, text) {
+            console.log('[TTS DEBUG] TTS button clicked');
+
+            // If already playing this paragraph, stop it
+            if (currentAudio && button.classList.contains('playing')) {
+                console.log('[TTS DEBUG] Stopping current audio');
+                stopCurrentAudio();
+                return;
+            }
+
+            // Stop any other playing audio
+            if (currentAudio) {
+                console.log('[TTS DEBUG] Stopping other audio');
+                stopCurrentAudio();
+            }
+
+            // Generate hash for this paragraph
+            const paraHash = await generateSimpleHash(text);
+            console.log(`[TTS DEBUG] Paragraph hash: ${paraHash}`);
+
+            // Check cache first
+            if (ttsCache.has(paraHash)) {
+                console.log('[TTS DEBUG] Found in cache');
+                playAudio(button, ttsCache.get(paraHash));
+                return;
+            }
+
+            // Show loading state
+            button.classList.add('loading');
+            button.setAttribute('title', 'Generating audio...');
+
+            try {
+                // Request TTS generation
+                console.log('[TTS DEBUG] Requesting TTS generation...');
+                const response = await fetch(`/read/${bookId}/generate-tts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                console.log('[TTS DEBUG] Response:', data);
+
+                if (data.status === 'cached') {
+                    // Audio already available
+                    console.log('[TTS DEBUG] Audio was cached on server');
+                    ttsCache.set(paraHash, data.audio_path);
+                    playAudio(button, data.audio_path);
+                } else if (data.status === 'generating') {
+                    // Poll for completion
+                    console.log('[TTS DEBUG] Starting polling for generation...');
+                    pollTTSStatus(button, data.para_hash);
+                }
+            } catch (error) {
+                console.error('[TTS ERROR] TTS generation error:', error);
+                button.classList.remove('loading');
+                button.setAttribute('title', 'Error generating audio');
+                // Show error state briefly
+                button.style.background = '#e74c3c';
+                setTimeout(() => {
+                    button.style.background = '';
+                }, 2000);
+            }
+        }
+
+        async function pollTTSStatus(button, paraHash) {
+            const maxAttempts = 30;  // 30 seconds max
+            let attempts = 0;
+
+            const pollInterval = setInterval(async () => {
+                attempts++;
+                console.log(`[TTS DEBUG] Polling attempt ${attempts}/${maxAttempts}`);
+
+                try {
+                    const response = await fetch(`/read/${bookId}/tts-status/${paraHash}`);
+                    const data = await response.json();
+                    console.log(`[TTS DEBUG] Poll ${attempts} - Status:`, data);
+
+                    if (data.ready && data.audio_path) {
+                        console.log('[TTS DEBUG] Audio ready!');
+                        clearInterval(pollInterval);
+                        ttsCache.set(paraHash, data.audio_path);
+                        playAudio(button, data.audio_path);
+                    } else if (attempts >= maxAttempts) {
+                        console.log('[TTS DEBUG] Max attempts reached');
+                        clearInterval(pollInterval);
+                        button.classList.remove('loading');
+                        button.setAttribute('title', 'Generation timeout - try again');
+                    }
+                } catch (error) {
+                    console.error('[TTS ERROR] Polling error:', error);
+                    clearInterval(pollInterval);
+                    button.classList.remove('loading');
+                }
+            }, 1000);
+        }
+
+        function playAudio(button, audioPath) {
+            console.log('[TTS DEBUG] Playing audio:', audioPath);
+
+            button.classList.remove('loading');
+            button.classList.add('playing');
+            button.setAttribute('title', 'Stop audio');
+
+            // Create and play audio
+            currentAudio = new Audio(`/read/${bookId}/${audioPath}`);
+            currentAudio.currentButton = button;
+
+            currentAudio.onended = () => {
+                console.log('[TTS DEBUG] Audio playback ended');
+                button.classList.remove('playing');
+                button.setAttribute('title', 'Play audio');
+                currentAudio = null;
+            };
+
+            currentAudio.onerror = (e) => {
+                console.error('[TTS ERROR] Audio playback error:', e);
+                button.classList.remove('playing');
+                button.setAttribute('title', 'Playback error');
+                currentAudio = null;
+            };
+
+            currentAudio.play().catch(err => {
+                console.error('[TTS ERROR] Audio play error:', err);
+                button.classList.remove('playing');
+            });
+        }
+
+        function stopCurrentAudio() {
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0;
+                if (currentAudio.currentButton) {
+                    currentAudio.currentButton.classList.remove('playing');
+                    currentAudio.currentButton.setAttribute('title', 'Play audio');
+                }
+                currentAudio = null;
+            }
+        }
     </script>
 </body>
 </html>
