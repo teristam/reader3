@@ -134,6 +134,29 @@ The TOC parser handles three structures from ebooklib:
 
 If TOC is missing or empty, `get_fallback_toc()` generates a flat TOC from the spine.
 
+#### TOC Illustration Icons
+
+The TOC displays visual indicators (blue image icons) next to chapter titles that have generated illustrations:
+
+1. **Backend** ([server.py](server.py:108-117)):
+   - `get_illustrations_map(book_id, spine_length)` builds a dictionary mapping chapter indices to illustration availability
+   - Checks all chapters using `get_cached_images()` to determine which have illustrations
+   - Returns `{chapter_index: has_illustrations}` boolean map
+
+2. **Template** ([templates/reader.html](templates/reader.html:81-104)):
+   - Each TOC link includes an SVG icon element (hidden by default)
+   - Uses flexbox layout with `flex-1` span for title and `flex-shrink-0` icon
+   - `data-file-href` attribute enables JavaScript to identify chapters
+   - Works for both parent sections and nested child chapters
+
+3. **Frontend** ([templates/reader.html](templates/reader.html:241-269)):
+   - `illustrationsMap` passed from Python to JavaScript via Jinja2's `tojson` filter
+   - `updateTOCIcons()` function maps TOC file hrefs to spine indices
+   - Shows/hides icons based on illustration availability
+   - Runs on `DOMContentLoaded` to update icons immediately on page load
+
+The feature provides instant visual feedback about which chapters have AI-generated illustrations, making it easy for users to navigate to illustrated content.
+
 ### FastAPI Background Tasks
 
 Illustration generation uses `BackgroundTasks` to avoid blocking the HTTP response:

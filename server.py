@@ -105,6 +105,18 @@ def get_chapter_with_images(book_id: str, chapter_index: int, chapter_content: s
     return chapter_content
 
 
+def get_illustrations_map(book_id: str, spine_length: int) -> dict:
+    """
+    Build a map of chapter indices to illustration availability.
+    Returns dict: {chapter_index: has_illustrations}
+    """
+    illustrations_map = {}
+    for chapter_idx in range(spine_length):
+        cached_images = get_cached_images(book_id, chapter_idx)
+        illustrations_map[chapter_idx] = (cached_images is not None and len(cached_images) > 0)
+    return illustrations_map
+
+
 @app.get("/read/{book_id}/{chapter_index}", response_class=HTMLResponse)
 async def read_chapter(request: Request, book_id: str, chapter_index: int, background_tasks: BackgroundTasks, auto_generate: bool = False):
     """The main reader interface."""
@@ -141,6 +153,9 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int, backg
     prev_idx = chapter_index - 1 if chapter_index > 0 else None
     next_idx = chapter_index + 1 if chapter_index < len(book.spine) - 1 else None
 
+    # Build illustration availability map for all chapters
+    illustrations_map = get_illustrations_map(book_id, len(book.spine))
+
     return templates.TemplateResponse("reader.html", {
         "request": request,
         "book": book,
@@ -156,7 +171,8 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int, backg
         "book_id": book_id,
         "prev_idx": prev_idx,
         "next_idx": next_idx,
-        "has_illustrations": has_images
+        "has_illustrations": has_images,
+        "illustrations_map": illustrations_map
     })
 
 

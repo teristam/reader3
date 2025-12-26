@@ -78,9 +78,14 @@
 
                        BETTER FIX: Use JavaScript to match filenames.
                     -->
-                    <a href="#" onclick="findAndGo('{{ item.file_href }}')"
-                       class="block py-1 text-gray-700 hover:text-black hover:underline text-sm leading-relaxed transition-colors {% if is_active %}text-pink-600 font-bold{% endif %}">
-                        {{ item.title }}
+                    <a href="#" onclick="findAndGo('{{ item.file_href }}')" data-file-href="{{ item.file_href }}"
+                       class="toc-link flex items-center gap-1.5 py-1 text-gray-700 hover:text-black hover:underline text-sm leading-relaxed transition-colors {% if is_active %}text-pink-600 font-bold{% endif %}">
+                        <span class="flex-1">{{ item.title }}</span>
+                        <svg class="illustration-icon hidden w-3.5 h-3.5 text-primary flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M4 3C2.89543 3 2 3.89543 2 5V15C2 16.1046 2.89543 17 4 17H16C17.1046 17 18 16.1046 18 15V5C18 3.89543 17.1046 3 16 3H4ZM4 5H16V15H4V5Z"/>
+                            <circle cx="7" cy="8" r="1.5"/>
+                            <path d="M13 13L10 10L7 13H13Z"/>
+                        </svg>
                     </a>
 
                     {% if item.children %}
@@ -88,9 +93,14 @@
                             {% for child in item.children %}
                             <li class="mb-2">
                                 {% set is_active_child = current_chapter.href == child.file_href %}
-                                <a href="#" onclick="findAndGo('{{ child.file_href }}')"
-                                   class="block py-1 text-gray-700 hover:text-black hover:underline text-sm leading-relaxed transition-colors {% if is_active_child %}text-pink-600 font-bold{% endif %}">
-                                    {{ child.title }}
+                                <a href="#" onclick="findAndGo('{{ child.file_href }}')" data-file-href="{{ child.file_href }}"
+                                   class="toc-link flex items-center gap-1.5 py-1 text-gray-700 hover:text-black hover:underline text-sm leading-relaxed transition-colors {% if is_active_child %}text-pink-600 font-bold{% endif %}">
+                                    <span class="flex-1">{{ child.title }}</span>
+                                    <svg class="illustration-icon hidden w-3.5 h-3.5 text-primary flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                        <path d="M4 3C2.89543 3 2 3.89543 2 5V15C2 16.1046 2.89543 17 4 17H16C17.1046 17 18 16.1046 18 15V5C18 3.89543 17.1046 3 16 3H4ZM4 5H16V15H4V5Z"/>
+                                        <circle cx="7" cy="8" r="1.5"/>
+                                        <path d="M13 13L10 10L7 13H13Z"/>
+                                    </svg>
                                 </a>
                             </li>
                             {% endfor %}
@@ -218,6 +228,9 @@
             {% endfor %}
         };
 
+        // Illustrations availability map (chapter_index -> has_illustrations)
+        const illustrationsMap = {{ illustrations_map | tojson | safe }};
+
         function findAndGo(filename) {
             // The TOC usually has specific filenames e.g. "text/part001.html"
             // Sometimes it has anchors "text/part001.html#header"
@@ -237,6 +250,36 @@
                 console.log("Could not find index for", filename);
             }
         }
+
+        // Update TOC icons based on illustration availability
+        function updateTOCIcons() {
+            console.log('[DEBUG] Updating TOC illustration icons...');
+            const tocLinks = document.querySelectorAll('.toc-link');
+
+            tocLinks.forEach(link => {
+                const fileHref = link.getAttribute('data-file-href');
+                const cleanFile = fileHref.split('#')[0];
+                const chapterIdx = spineMap[cleanFile];
+
+                if (chapterIdx !== undefined) {
+                    const hasIllustrations = illustrationsMap[chapterIdx];
+                    const icon = link.querySelector('.illustration-icon');
+
+                    if (icon) {
+                        if (hasIllustrations) {
+                            icon.classList.remove('hidden');
+                        } else {
+                            icon.classList.add('hidden');
+                        }
+                    }
+                }
+            });
+
+            console.log('[DEBUG] TOC icons updated');
+        }
+
+        // Update icons on page load
+        document.addEventListener('DOMContentLoaded', updateTOCIcons);
 
         // Illustration generation
         const bookId = "{{ book_id }}";

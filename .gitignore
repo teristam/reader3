@@ -13,3 +13,5 @@ wheels/
 *_data/
 *.epub
 logs/*
+
+.playwright-mcp
