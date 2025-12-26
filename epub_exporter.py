@@ -184,7 +184,7 @@ def rebuild_toc_for_epub(toc_entries: List[TOCEntry], href_to_item: Dict[str, ep
     Returns:
         List compatible with epub.toc assignment:
         - epub.Link for simple entries
-        - (epub.Section, [children]) for nested entries
+        - (epub.Link, [children]) for nested entries with clickable parent
     """
     result = []
 
@@ -195,16 +195,21 @@ def rebuild_toc_for_epub(toc_entries: List[TOCEntry], href_to_item: Dict[str, ep
             logger.warning(f"TOC entry not found in spine: {entry.file_href}")
             continue
 
-        # Build href with anchor if present
-        href = entry.file_href
+        # Extract the actual filename from the EPUB item
+        epub_filename = item.file_name  # This is "chapter_0000.xhtml"
+
+        # Build href with new filename and preserve anchor if present
+        href = epub_filename
         if entry.anchor:
-            href = f"{entry.file_href}#{entry.anchor}"
+            href = f"{epub_filename}#{entry.anchor}"
 
         if entry.children:
-            # Nested section
-            section = epub.Section(entry.title)
+            # Create parent link (clickable section header)
+            parent_link = epub.Link(href, entry.title, entry.title)
+            # Recursively process children
             children_toc = rebuild_toc_for_epub(entry.children, href_to_item)
-            result.append((section, children_toc))
+            # Create nested structure: (parent_link, children)
+            result.append((parent_link, children_toc))
         else:
             # Simple link
             link = epub.Link(href, entry.title, entry.title)
