@@ -83,8 +83,12 @@ export GEMINI_API_KEY=your_api_key_here
 
 ### How It Works
 
-1. **Auto-generation**: When a chapter is opened, illustrations are generated in the background if not cached
-2. **Manual trigger**: Users can click "Generate Illustrations" to manually trigger generation
+1. **Manual trigger (single chapter)**: Users can click "Generate Illustrations" in the floating action button to generate for the current chapter
+2. **Batch generation (whole book)**: Users can click the book menu icon next to the book title → "Generate All Illustrations"
+   - Generates illustrations for all chapters with 1000+ words (filters out short chapters)
+   - Runs 3 chapters in parallel using asyncio semaphore (prevents API rate limiting)
+   - Shows real-time progress: "Generating 5/12 chapters..."
+   - Progress persists across page refreshes via `batch_{uuid}.json` files
 3. **Scene Analysis**:
    - Chapter text sent to `gemini-3.0-flash-preview` for scene identification
    - Returns 3 scenes with summaries and location percentages (0-100)
@@ -181,6 +185,8 @@ Per the README, this is a "90% vibe coded" project meant as inspiration rather t
 - No complex build process
 - Books managed by adding/removing directories
 
+## Testing
+After you have completed your work. Use the playwright MCP to check the web app is working as intended
 
 ## Things to take note
 - the Image object returned by `part.as_image()` is not a PIL image. It is a special  class of the Google genai package. It has `save(filename)` function which save the data as a image file. Note there is not `format` parameter there. You can use `part.as_image()._pil_image` to get the PIL image.

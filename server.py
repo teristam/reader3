@@ -1,6 +1,8 @@
 import os
 import pickle
 import json
+import uuid
+import asyncio
 from functools import lru_cache
 from typing import Optional, List
 
@@ -267,6 +269,159 @@ async def serve_image(book_id: str, image_name: str):
         raise HTTPException(status_code=404, detail="Image not found")
 
     return FileResponse(img_path)
+
+
+# ============= BATCH ILLUSTRATION GENERATION =============
+
+def count_words(text: str) -> int:
+    """Count words in text."""
+    return len(text.split())
+
+
+async def batch_generate_all_illustrations(book_id: str, book: Book, batch_id: str):
+    """
+    Background task to generate illustrations for all eligible chapters in parallel.
+    Uses semaphore to limit concurrent API calls to 3.
+    Only generates for chapters with 1000+ words.
+    """
+    print(f"[BATCH DEBUG] Starting batch generation {batch_id} for {book_id}")
+
+    # Initialize progress file
+    progress_file = os.path.join(book_id, f"batch_{batch_id}.json")
+
+    # Filter chapters by word count (1000+ words)
+    eligible_chapters = []
+    for idx, chapter in enumerate(book.spine):
+        word_count = count_words(chapter.text)
+        if word_count >= 1000:
+            eligible_chapters.append((idx, chapter, word_count))
+            print(f"[BATCH DEBUG] Chapter {idx} eligible: {word_count} words - {chapter.title}")
+        else:
+            print(f"[BATCH DEBUG] Chapter {idx} skipped: {word_count} words (< 1000) - {chapter.title}")
+
+    total = len(eligible_chapters)
+    completed = 0
+    failed = []
+
+    # Update initial progress
+    progress = {
+        "status": "in_progress",
+        "total": total,
+        "completed": 0,
+        "failed": [],
+        "started_at": str(asyncio.get_event_loop().time())
+    }
+    with open(progress_file, "w") as f:
+        json.dump(progress, f)
+
+    # Semaphore to limit concurrent tasks to 3
+    semaphore = asyncio.Semaphore(3)
+
+    async def generate_chapter_task(chapter_idx: int, chapter: ChapterContent, word_count: int):
+        """Task to generate illustrations for a single chapter."""
+        nonlocal completed, failed
+
+        async with semaphore:
+            print(f"[BATCH DEBUG] Starting chapter {chapter_idx} ({word_count} words)")
+
+            try:
+                # Check if already has illustrations
+                cached = get_cached_images(book_id, chapter_idx)
+                if cached and len(cached) >= 3:
+                    print(f"[BATCH DEBUG] Chapter {chapter_idx} already has illustrations, skipping")
+                else:
+                    # Generate illustrations (runs in thread pool since it's sync)
+                    await asyncio.to_thread(
+                        generate_illustrations_for_chapter,
+                        book_id,
+                        chapter_idx,
+                        chapter.text,
+                        book.metadata.title,
+                        chapter.title,
+                        False  # Don't force regenerate if exists
+                    )
+                    print(f"[BATCH DEBUG] Chapter {chapter_idx} completed successfully")
+
+                completed += 1
+
+            except Exception as e:
+                print(f"[BATCH DEBUG] Chapter {chapter_idx} failed: {e}")
+                failed.append({"chapter": chapter_idx, "error": str(e)})
+                completed += 1  # Still count as processed
+
+            # Update progress
+            progress["completed"] = completed
+            progress["failed"] = failed
+            with open(progress_file, "w") as f:
+                json.dump(progress, f)
+
+    # Create tasks for all eligible chapters
+    tasks = [
+        generate_chapter_task(idx, chapter, word_count)
+        for idx, chapter, word_count in eligible_chapters
+    ]
+
+    # Run all tasks concurrently (semaphore limits to 3 at a time)
+    await asyncio.gather(*tasks)
+
+    # Mark as completed
+    progress["status"] = "completed"
+    progress["completed"] = completed
+    progress["failed"] = failed
+    with open(progress_file, "w") as f:
+        json.dump(progress, f)
+
+    print(f"[BATCH DEBUG] Batch {batch_id} completed: {completed}/{total} chapters, {len(failed)} failed")
+
+
+@app.post("/read/{book_id}/generate-all-illustrations")
+async def generate_all_illustrations_endpoint(book_id: str, background_tasks: BackgroundTasks):
+    """Start batch generation for all eligible chapters in the book."""
+    print(f"[BATCH DEBUG] POST /generate-all-illustrations for {book_id}")
+
+    book = load_book_cached(book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    # Create batch ID
+    batch_id = str(uuid.uuid4())
+
+    # Count eligible chapters (1000+ words)
+    eligible_count = sum(1 for ch in book.spine if count_words(ch.text) >= 1000)
+
+    print(f"[BATCH DEBUG] Starting batch {batch_id}: {eligible_count}/{len(book.spine)} eligible chapters")
+
+    # Start background task
+    background_tasks.add_task(batch_generate_all_illustrations, book_id, book, batch_id)
+
+    return JSONResponse({
+        "status": "started",
+        "batch_id": batch_id,
+        "total_chapters": len(book.spine),
+        "eligible_chapters": eligible_count
+    })
+
+
+@app.get("/read/{book_id}/batch-status/{batch_id}")
+async def batch_status_endpoint(book_id: str, batch_id: str):
+    """Check status of batch illustration generation."""
+    progress_file = os.path.join(book_id, f"batch_{batch_id}.json")
+
+    if not os.path.exists(progress_file):
+        return JSONResponse({
+            "status": "not_found",
+            "error": "Batch ID not found"
+        })
+
+    try:
+        with open(progress_file, "r") as f:
+            progress = json.load(f)
+        return JSONResponse(progress)
+    except Exception as e:
+        return JSONResponse({
+            "status": "error",
+            "error": f"Failed to read progress: {str(e)}"
+        })
 
 
 # ============= TTS ENDPOINTS =============

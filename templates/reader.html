@@ -43,7 +43,41 @@
         </button>
 
         <a href="/" class="block mb-5 text-primary no-underline text-sm">← Back to Library</a>
-        <div class="font-sans font-bold text-gray-700 mb-4 pb-2.5 border-b border-gray-300">{{ book.metadata.title }}</div>
+
+        <!-- Book Title with Menu -->
+        <div class="relative mb-4 pb-2.5 border-b border-gray-300">
+            <div class="flex items-center gap-2 group">
+                <div class="font-sans font-bold text-gray-700 flex-1">{{ book.metadata.title }}</div>
+
+                <!-- Book Menu Button -->
+                <button
+                    id="book-menu-btn"
+                    class="p-1.5 rounded hover:bg-gray-200 transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
+                    onclick="toggleBookMenu(event)"
+                    title="Book actions">
+                    <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Book Menu Dropdown -->
+            <div
+                id="book-menu-dropdown"
+                class="hidden absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-lg shadow-xl min-w-[200px] z-50">
+                <a
+                    href="/export/{{ book_id }}"
+                    class="block w-full px-4 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50 transition-colors rounded-t-lg">
+                    Export Book as EPUB
+                </a>
+                <div class="h-px bg-gray-200"></div>
+                <button
+                    class="block w-full px-4 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50 transition-colors rounded-b-lg"
+                    onclick="generateAllIllustrations(); closeBookMenu();">
+                    Generate All Illustrations
+                </button>
+            </div>
+        </div>
 
         <!-- Recursive Macro for TOC -->
         {% macro render_toc(items) %}
@@ -199,7 +233,7 @@
             }
         });
 
-        // Dropdown menu controls
+        // Dropdown menu controls (chapter actions)
         function toggleDropdown() {
             const dropdown = document.getElementById('actions-dropdown-menu');
             dropdown.classList.toggle('hidden');
@@ -219,6 +253,183 @@
                 closeDropdown();
             }
         });
+
+        // Book menu controls (book-level actions in sidebar)
+        function toggleBookMenu(event) {
+            event.stopPropagation();
+            const dropdown = document.getElementById('book-menu-dropdown');
+            dropdown.classList.toggle('hidden');
+        }
+
+        function closeBookMenu() {
+            const dropdown = document.getElementById('book-menu-dropdown');
+            dropdown.classList.add('hidden');
+        }
+
+        // Close book menu when clicking outside
+        window.addEventListener('click', function(event) {
+            const bookDropdown = document.getElementById('book-menu-dropdown');
+            const bookButton = document.getElementById('book-menu-btn');
+
+            if (bookButton && !bookButton.contains(event.target) && bookDropdown && !bookDropdown.contains(event.target)) {
+                closeBookMenu();
+            }
+        });
+
+        // Generate illustrations for all chapters in the book
+        async function generateAllIllustrations() {
+            const totalChapters = {{ book.spine | length }};
+
+            if (!confirm('This will generate illustrations for all ' + totalChapters + ' chapters (filtered by length). This may take 10-30 minutes. Continue?')) {
+                return;
+            }
+
+            console.log('[DEBUG] Starting bulk illustration generation for all chapters');
+            closeBookMenu();
+
+            try {
+                // Start batch generation
+                const response = await fetch('/read/' + bookId + '/generate-all-illustrations', {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to start batch generation: ' + response.statusText);
+                }
+
+                const data = await response.json();
+                console.log('[DEBUG] Batch generation started:', data);
+
+                // Store batch ID in localStorage for persistence across page navigation
+                localStorage.setItem('activeBatchId_' + bookId, data.batch_id);
+                localStorage.setItem('activeBatchTotal_' + bookId, data.eligible_chapters);
+
+                // Show progress notification
+                const statusDiv = document.getElementById('illustration-status');
+                statusDiv.textContent = 'Generating illustrations for ' + data.eligible_chapters + ' chapters...';
+                statusDiv.classList.remove('hidden');
+
+                // Poll for progress
+                pollBatchProgress(data.batch_id, data.eligible_chapters);
+
+            } catch (error) {
+                console.error('[DEBUG] Error starting batch generation:', error);
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // Poll batch generation progress
+        async function pollBatchProgress(batchId, totalChapters) {
+            const statusDiv = document.getElementById('illustration-status');
+            let attempts = 0;
+            const maxAttempts = 1800; // 30 minutes max (checking every second)
+
+            const pollInterval = setInterval(async () => {
+                attempts++;
+
+                try {
+                    const response = await fetch('/read/' + bookId + '/batch-status/' + batchId);
+                    const data = await response.json();
+
+                    console.log('[DEBUG] Batch progress:', data);
+
+                    if (data.status === 'completed') {
+                        clearInterval(pollInterval);
+
+                        // Clear localStorage
+                        localStorage.removeItem('activeBatchId_' + bookId);
+                        localStorage.removeItem('activeBatchTotal_' + bookId);
+
+                        statusDiv.textContent = '✓ Generated ' + data.completed + ' illustrations!';
+                        statusDiv.classList.add('!text-green-600');
+
+                        // Refresh TOC icons after 2 seconds
+                        setTimeout(() => {
+                            updateTOCIcons();
+                            statusDiv.classList.add('hidden');
+                            statusDiv.classList.remove('!text-green-600');
+                        }, 3000);
+                    } else if (data.status === 'error') {
+                        clearInterval(pollInterval);
+
+                        // Clear localStorage
+                        localStorage.removeItem('activeBatchId_' + bookId);
+                        localStorage.removeItem('activeBatchTotal_' + bookId);
+
+                        statusDiv.textContent = '✗ Error: ' + (data.error || 'Generation failed');
+                        statusDiv.classList.add('!text-red-600');
+                    } else if (data.status === 'in_progress') {
+                        // Update progress
+                        statusDiv.textContent = 'Generating ' + data.completed + '/' + data.total + ' chapters...';
+                    } else if (data.status === 'not_found') {
+                        // Batch not found - might be old/deleted
+                        clearInterval(pollInterval);
+                        localStorage.removeItem('activeBatchId_' + bookId);
+                        localStorage.removeItem('activeBatchTotal_' + bookId);
+                        statusDiv.classList.add('hidden');
+                    } else if (attempts >= maxAttempts) {
+                        clearInterval(pollInterval);
+                        statusDiv.textContent = 'Timeout - refresh page to check results';
+                        statusDiv.classList.add('!text-orange-600');
+                    }
+                } catch (error) {
+                    console.error('[DEBUG] Error polling batch status:', error);
+                }
+            }, 1000);
+        }
+
+        // Check for active batch generation on page load
+        async function checkActiveBatchGeneration() {
+            const batchId = localStorage.getItem('activeBatchId_' + bookId);
+            const totalChapters = localStorage.getItem('activeBatchTotal_' + bookId);
+
+            if (!batchId) {
+                console.log('[DEBUG] No active batch generation found');
+                return;
+            }
+
+            console.log('[DEBUG] Found active batch generation:', batchId);
+
+            // Check if the batch is still in progress
+            try {
+                const response = await fetch('/read/' + bookId + '/batch-status/' + batchId);
+                const data = await response.json();
+
+                console.log('[DEBUG] Active batch status:', data);
+
+                if (data.status === 'in_progress') {
+                    // Resume polling
+                    const statusDiv = document.getElementById('illustration-status');
+                    statusDiv.textContent = 'Generating ' + data.completed + '/' + data.total + ' chapters...';
+                    statusDiv.classList.remove('hidden');
+
+                    pollBatchProgress(batchId, totalChapters || data.total);
+                } else if (data.status === 'completed') {
+                    // Show completion message briefly
+                    const statusDiv = document.getElementById('illustration-status');
+                    statusDiv.textContent = '✓ Generated ' + data.completed + ' illustrations!';
+                    statusDiv.classList.add('!text-green-600');
+                    statusDiv.classList.remove('hidden');
+
+                    // Update TOC icons and clear
+                    setTimeout(() => {
+                        updateTOCIcons();
+                        statusDiv.classList.add('hidden');
+                        statusDiv.classList.remove('!text-green-600');
+                    }, 3000);
+
+                    // Clear localStorage
+                    localStorage.removeItem('activeBatchId_' + bookId);
+                    localStorage.removeItem('activeBatchTotal_' + bookId);
+                } else {
+                    // Batch not found or error - clear localStorage
+                    localStorage.removeItem('activeBatchId_' + bookId);
+                    localStorage.removeItem('activeBatchTotal_' + bookId);
+                }
+            } catch (error) {
+                console.error('[DEBUG] Error checking batch status:', error);
+            }
+        }
 
         // Helper to map TOC filenames to Spine Indices
         // Pass the spine data from python to JS
@@ -280,6 +491,9 @@
 
         // Update icons on page load
         document.addEventListener('DOMContentLoaded', updateTOCIcons);
+
+        // Check for active batch generation on page load
+        document.addEventListener('DOMContentLoaded', checkActiveBatchGeneration);
 
         // Illustration generation
         const bookId = "{{ book_id }}";
