@@ -469,12 +469,20 @@ def get_cached_images(book_id: str, chapter_index: int) -> Optional[List[str]]:
         return None
 
 
-def save_image_metadata(book_id: str, chapter_index: int, image_paths: List[str], scene_locations: Optional[List[int]] = None):
+def save_image_metadata(book_id: str, chapter_index: int, image_paths: List[str], scene_locations: Optional[List[int]] = None, status: str = "completed", error: Optional[str] = None):
     """
     Save metadata about generated images to track caching.
+
+    Args:
+        book_id: The book directory name
+        chapter_index: Index of the chapter
+        image_paths: List of generated image paths
+        scene_locations: Optional list of scene location percentages
+        status: Generation status - "generating", "completed", or "error"
+        error: Error message if status is "error"
     """
     metadata_file = os.path.join(book_id, "generated_images.json")
-    
+
     # Load existing metadata
     metadata = {}
     if os.path.exists(metadata_file):
@@ -483,16 +491,19 @@ def save_image_metadata(book_id: str, chapter_index: int, image_paths: List[str]
                 metadata = json.load(f)
         except:
             metadata = {}
-    
+
     # Update with new chapter images
     chapter_key = str(chapter_index)
     chapter_data = {
-        "images": image_paths
+        "images": image_paths,
+        "status": status
     }
     if scene_locations:
         chapter_data["scene_locations"] = scene_locations
+    if error:
+        chapter_data["error"] = error
     metadata[chapter_key] = chapter_data
-    
+
     # Save back
     with open(metadata_file, "w") as f:
         json.dump(metadata, f, indent=2)
@@ -564,67 +575,92 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
             except Exception as e:
                 logger.error(f"❌ Error cleaning up old images: {e}")
 
+    # Mark as generating
+    save_image_metadata(book_id, chapter_index, [], status="generating")
     logger.info("🆕 Generating new images...")
 
-    # Generate scenes
-    logger.info("📋 Step 1: Summarizing scenes...")
-    scenes = summarize_scenes(chapter_text)
-    logger.success(f"✅ Got {len(scenes)} scenes")
+    try:
+        # Generate scenes
+        logger.info("📋 Step 1: Summarizing scenes...")
+        scenes = summarize_scenes(chapter_text)
+        logger.success(f"✅ Got {len(scenes)} scenes")
 
-    image_paths = []
-    scene_locations = []
+        image_paths = []
+        scene_locations = []
 
-    for i, scene in enumerate(scenes):
-        logger.info("=" * 60)
-        logger.info(f"🎨 Processing Scene {i+1}/{len(scenes)}")
-        logger.info("=" * 60)
-        scene_num = scene["scene_number"]
-        scene_summary = scene["summary"]
-        scene_location = scene.get("location_percent", 33 * (scene_num - 1))
-        scene_locations.append(scene_location)
+        for i, scene in enumerate(scenes):
+            logger.info("=" * 60)
+            logger.info(f"🎨 Processing Scene {i+1}/{len(scenes)}")
+            logger.info("=" * 60)
+            scene_num = scene["scene_number"]
+            scene_summary = scene["summary"]
+            scene_location = scene.get("location_percent", 33 * (scene_num - 1))
+            scene_locations.append(scene_location)
 
-        logger.info(f"Summary: {scene_summary[:100]}...")
-        logger.info(f"Location: {scene_location}%")
+            logger.info(f"Summary: {scene_summary[:100]}...")
+            logger.info(f"Location: {scene_location}%")
 
-        try:
-            # Create image prompt
-            logger.info(f"📝 Step 2: Creating image prompt for scene {i+1}...")
-            prompt = create_image_prompt(scene_summary, book_title)
+            try:
+                # Create image prompt
+                logger.info(f"📝 Step 2: Creating image prompt for scene {i+1}...")
+                prompt = create_image_prompt(scene_summary, book_title)
 
-            # Generate image
-            logger.info(f"🎨 Step 3: Generating image for scene {i+1}...")
-            image_bytes = generate_image(prompt)
-            logger.info(f"Generated image: {len(image_bytes)} bytes")
+                # Generate image
+                logger.info(f"🎨 Step 3: Generating image for scene {i+1}...")
+                image_bytes = generate_image(prompt)
+                logger.info(f"Generated image: {len(image_bytes)} bytes")
 
-            # Validate before saving
-            if len(image_bytes) < 1000:
-                raise ValueError(f"Image too small: {len(image_bytes)} bytes - likely an error response")
+                # Validate before saving
+                if len(image_bytes) < 1000:
+                    raise ValueError(f"Image too small: {len(image_bytes)} bytes - likely an error response")
 
-            # Save image
-            logger.info(f"💾 Step 4: Saving image for scene {i+1}...")
-            img_path = save_image(image_bytes, book_id, chapter_index, scene_num, chapter_title)
-            logger.success(f"✅ Saved image to: {img_path}")
-            image_paths.append(img_path)
+                # Save image
+                logger.info(f"💾 Step 4: Saving image for scene {i+1}...")
+                img_path = save_image(image_bytes, book_id, chapter_index, scene_num, chapter_title)
+                logger.success(f"✅ Saved image to: {img_path}")
+                image_paths.append(img_path)
 
-        except Exception as e:
-            logger.error("=" * 60)
-            logger.error(f"❌ ERROR processing scene {i+1}")
-            logger.error("=" * 60)
-            logger.error(f"Error type: {type(e).__name__}")
-            logger.error(f"Error message: {str(e)}")
-            logger.exception("Full traceback:")
-            # Re-raise to stop generation - we don't want partial results
-            raise Exception(f"Failed to generate image for scene {i+1}: {str(e)}") from e
+            except Exception as e:
+                logger.error("=" * 60)
+                logger.error(f"❌ ERROR processing scene {i+1}")
+                logger.error("=" * 60)
+                logger.error(f"Error type: {type(e).__name__}")
+                logger.error(f"Error message: {str(e)}")
+                logger.exception("Full traceback:")
+                # Re-raise to stop generation - we don't want partial results
+                raise Exception(f"Failed to generate image for scene {i+1}: {str(e)}") from e
 
-    # Save metadata with scene locations
-    logger.info("💾 Step 5: Saving metadata...")
-    save_image_metadata(book_id, chapter_index, image_paths, scene_locations)
-    logger.success("=" * 60)
-    logger.success("🎉 GENERATION COMPLETE!")
-    logger.success("=" * 60)
-    logger.success(f"Generated {len(image_paths)} images: {image_paths}")
+        # Save metadata with scene locations
+        logger.info("💾 Step 5: Saving metadata...")
+        save_image_metadata(book_id, chapter_index, image_paths, scene_locations, status="completed")
+        logger.success("=" * 60)
+        logger.success("🎉 GENERATION COMPLETE!")
+        logger.success("=" * 60)
+        logger.success(f"Generated {len(image_paths)} images: {image_paths}")
 
-    return image_paths
+        return image_paths
+
+    except Exception as e:
+        # Save error to metadata
+        error_message = str(e)
+        logger.error(f"❌ Generation failed: {error_message}")
+
+        # Extract a user-friendly error message
+        if "No image data found in response" in error_message:
+            if "blocked by safety filters" in error_message:
+                user_error = "Image generation blocked by safety filters. Try regenerating with different content."
+            else:
+                user_error = "Image generation failed - no image data received from API."
+        elif "Failed to generate image for scene" in error_message:
+            user_error = error_message  # Already user-friendly
+        else:
+            user_error = f"Generation error: {error_message}"
+
+        save_image_metadata(book_id, chapter_index, [], status="error", error=user_error)
+        logger.error(f"❌ Saved error to metadata: {user_error}")
+
+        # Re-raise to ensure the error is logged
+        raise
 
 
 def inject_images_into_html(html_content: str, image_paths: List[str], scene_locations: List[int]) -> str:

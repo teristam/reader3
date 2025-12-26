@@ -104,32 +104,33 @@
         {{ render_toc(book.toc) }}
     </div>
 
+    <!-- Floating Action Button (Fixed Lower Right) -->
+    <div class="fixed bottom-6 right-6 z-50">
+        <!-- Status Text (shown above the button) -->
+        <div id="illustration-status" class="text-xs text-gray-600 bg-white px-3 py-1.5 rounded-full shadow-md mb-2 text-center whitespace-nowrap hidden"></div>
+
+        <!-- Dropdown Menu (appears above button) -->
+        <div class="hidden absolute bottom-full right-0 mb-3 bg-white border border-gray-200 rounded-lg shadow-xl min-w-[220px]" id="actions-dropdown-menu">
+            <button class="block w-full px-4 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50 transition-colors disabled:text-gray-400 disabled:cursor-not-allowed disabled:bg-transparent rounded-t-lg" id="generate-illustrations-btn" onclick="generateIllustrations(); closeDropdown();">
+                <span id="illustration-btn-text">Generate Illustrations</span>
+            </button>
+            <div class="h-px bg-gray-200"></div>
+            <button class="block w-full px-4 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50 transition-colors rounded-b-lg" onclick="exportChapter(); closeDropdown();">
+                Export Chapter as EPUB
+            </button>
+        </div>
+
+        <!-- Circular Action Button -->
+        <button class="w-14 h-14 bg-primary hover:bg-primary-dark text-white rounded-full shadow-lg hover:shadow-xl flex items-center justify-center transition-all hover:scale-110" onclick="toggleDropdown()" id="actions-menu-btn" title="Actions">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/>
+            </svg>
+        </button>
+    </div>
+
     <!-- MAIN CONTENT -->
     <div id="main" class="flex-1 overflow-y-auto pt-14 lg:pt-0 scroll-smooth">
         <div class="content-container max-w-3xl mx-auto px-4 sm:px-6 lg:px-10 py-8 sm:py-12 lg:py-15 text-lg leading-relaxed text-gray-800">
-            <!-- Actions Dropdown at Top -->
-            <div class="mb-7 p-5 bg-gray-50 rounded-lg">
-                <div class="flex flex-col items-end gap-2.5">
-                    <div class="relative inline-block">
-                        <button class="bg-gray-600 hover:bg-gray-700 text-white font-bold px-5 py-2.5 rounded flex items-center gap-2 transition-colors" onclick="toggleDropdown()" id="actions-menu-btn">
-                            Actions
-                            <svg class="w-3 h-3" viewBox="0 0 12 8" fill="currentColor">
-                                <path d="M6 8L0 0h12L6 8z"/>
-                            </svg>
-                        </button>
-                        <div class="hidden absolute top-full right-0 mt-1 bg-white border border-gray-200 rounded shadow-lg min-w-[220px] z-[1000]" id="actions-dropdown-menu">
-                            <button class="block w-full px-4 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50 transition-colors disabled:text-gray-400 disabled:cursor-not-allowed disabled:bg-transparent" id="generate-illustrations-btn" onclick="generateIllustrations(); closeDropdown();">
-                                <span id="illustration-btn-text">Generate Illustrations</span>
-                            </button>
-                            <div class="h-px bg-gray-200 my-1"></div>
-                            <button class="block w-full px-4 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50 transition-colors" onclick="exportChapter(); closeDropdown();">
-                                Export Chapter as EPUB
-                            </button>
-                        </div>
-                    </div>
-                </div>
-                <div id="illustration-status" class="text-sm text-gray-600 text-right mt-2"></div>
-            </div>
 
             <div class="book-content prose prose-lg max-w-none prose-img:mx-auto prose-p:text-justify prose-h1:font-sans prose-h2:font-sans prose-h3:font-sans prose-h1:text-gray-800 prose-h2:text-gray-800 prose-h3:text-gray-800 prose-h1:mt-6 prose-h2:mt-6 prose-h3:mt-6 prose-p:mb-6">
                 {{ current_chapter.content | safe }}
@@ -250,18 +251,14 @@
                 console.log('[DEBUG] Status response:', response.status, response.statusText);
                 const data = await response.json();
                 console.log('[DEBUG] Status data:', JSON.stringify(data, null, 2));
-                
-                const statusDiv = document.getElementById('illustration-status');
+
                 const btn = document.getElementById('generate-illustrations-btn');
-                
+
                 if (data.has_illustrations) {
-                    statusDiv.textContent = `✓ ${data.image_count} illustrations available`;
                     const btnText = document.getElementById('illustration-btn-text');
                     if (btnText) {
                         btnText.textContent = 'Regenerate Illustrations';
                     }
-                } else {
-                    statusDiv.textContent = 'No illustrations yet';
                 }
             } catch (error) {
                 console.error('[DEBUG] Error checking illustration status:', error);
@@ -272,39 +269,40 @@
             console.log('[DEBUG] ===== Starting illustration generation =====');
             console.log('[DEBUG] Book ID:', bookId);
             console.log('[DEBUG] Chapter Index:', chapterIndex);
-            
+
             const btn = document.getElementById('generate-illustrations-btn');
             const btnText = document.getElementById('illustration-btn-text');
             const statusDiv = document.getElementById('illustration-status');
-            
+
             // Disable button and show loading
             btn.disabled = true;
             btnText.innerHTML = '<span class="inline-block w-4 h-4 border-2 border-gray-200 border-t-primary rounded-full animate-spin mr-2"></span>Generating...';
-            statusDiv.textContent = 'Generating illustrations (this may take a minute)...';
-            
+            statusDiv.textContent = 'Generating...';
+            statusDiv.classList.remove('hidden');
+
             try {
                 const url = `/read/${bookId}/${chapterIndex}/generate-illustrations`;
                 console.log('[DEBUG] POST request to:', url);
-                
+
                 const response = await fetch(url, {
                     method: 'POST'
                 });
-                
+
                 console.log('[DEBUG] Response status:', response.status, response.statusText);
                 console.log('[DEBUG] Response headers:', Object.fromEntries(response.headers.entries()));
-                
+
                 const responseData = await response.json().catch(async () => {
                     const text = await response.text();
                     return { text };
                 });
                 console.log('[DEBUG] Response data:', JSON.stringify(responseData, null, 2));
-                
+
                 if (response.ok) {
                     console.log('[DEBUG] Generation started, beginning polling...');
                     // Poll for completion
                     let attempts = 0;
                     const maxAttempts = 180; // 180 seconds (3 minutes) - generation can take a while
-                    
+
                     const pollInterval = setInterval(async () => {
                         attempts++;
                         console.log(`[DEBUG] Polling attempt ${attempts}/${maxAttempts}`);
@@ -313,21 +311,38 @@
                             const statusData = await statusResponse.json();
                             console.log(`[DEBUG] Poll ${attempts} - Status:`, JSON.stringify(statusData, null, 2));
 
+                            // Check for error status
+                            if (statusData.status === 'error') {
+                                console.log('[DEBUG] ✗ Generation failed with error');
+                                clearInterval(pollInterval);
+                                btn.disabled = false;
+                                btnText.textContent = 'Generate Illustrations';
+                                statusDiv.textContent = `✗ Error: ${statusData.error || 'Generation failed'}`;
+                                statusDiv.classList.add('!text-red-600');
+                                statusDiv.classList.remove('hidden');
+                                // Keep error visible for longer
+                                setTimeout(() => {
+                                    statusDiv.classList.add('hidden');
+                                    statusDiv.classList.remove('!text-red-600');
+                                }, 10000);
+                            }
                             // Check that we have all 3 illustrations (not just some)
-                            if (statusData.has_illustrations && statusData.image_count === 3) {
+                            else if (statusData.has_illustrations && statusData.image_count === 3) {
                                 console.log('[DEBUG] ✓ All 3 illustrations found! Stopping poll.');
                                 clearInterval(pollInterval);
-                                statusDiv.textContent = '✓ Illustrations generated! Refreshing page...';
-                                // Refresh page after a short delay
+                                statusDiv.textContent = `✓ ${statusData.image_count} generated!`;
+                                statusDiv.classList.add('!text-green-600');
+                                // Refresh page after showing toast briefly
                                 setTimeout(() => {
                                     window.location.reload();
-                                }, 1000);
+                                }, 1500);
                             } else if (attempts >= maxAttempts) {
                                 console.log('[DEBUG] Max attempts reached, stopping poll.');
                                 clearInterval(pollInterval);
                                 btn.disabled = false;
                                 btnText.textContent = 'Generate Illustrations';
-                                statusDiv.textContent = 'Generation taking longer than expected. Please refresh the page in a moment.';
+                                statusDiv.textContent = 'Timeout - refresh page';
+                                statusDiv.classList.add('!text-orange-600');
                             }
                         } catch (error) {
                             console.error('[DEBUG] Error polling status:', error);
@@ -343,7 +358,14 @@
                 console.error('[DEBUG] Error stack:', error.stack);
                 btn.disabled = false;
                 btnText.textContent = 'Generate Illustrations';
-                statusDiv.textContent = 'Error: ' + error.message;
+                statusDiv.textContent = `✗ Error: ${error.message || 'Failed to start generation'}`;
+                statusDiv.classList.add('!text-red-600');
+                statusDiv.classList.remove('hidden');
+                // Keep error visible
+                setTimeout(() => {
+                    statusDiv.classList.add('hidden');
+                    statusDiv.classList.remove('!text-red-600');
+                }, 10000);
             }
         }
 

@@ -207,9 +207,31 @@ async def generate_illustrations_endpoint(book_id: str, chapter_index: int, back
 async def illustration_status(book_id: str, chapter_index: int):
     """Check if illustrations exist for a chapter."""
     cached_images = get_cached_images(book_id, chapter_index)
+
+    # Load metadata to check for status and errors
+    status = "unknown"
+    error_message = None
+    metadata_file = os.path.join(book_id, "generated_images.json")
+
+    if os.path.exists(metadata_file):
+        try:
+            with open(metadata_file, "r") as f:
+                metadata = json.load(f)
+            chapter_key = str(chapter_index)
+            if chapter_key in metadata:
+                chapter_data = metadata[chapter_key]
+                if isinstance(chapter_data, dict):
+                    status = chapter_data.get("status", "completed")
+                    error_message = chapter_data.get("error")
+
+        except Exception as e:
+            print(f"Error reading metadata: {e}")
+
     return JSONResponse({
         "has_illustrations": cached_images is not None,
-        "image_count": len(cached_images) if cached_images else 0
+        "image_count": len(cached_images) if cached_images else 0,
+        "status": status,
+        "error": error_message
     })
 
 @app.get("/read/{book_id}/images/{image_name}")
