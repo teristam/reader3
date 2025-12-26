@@ -86,7 +86,7 @@ export GEMINI_API_KEY=your_api_key_here
 1. **Auto-generation**: When a chapter is opened, illustrations are generated in the background if not cached
 2. **Manual trigger**: Users can click "Generate Illustrations" to manually trigger generation
 3. **Scene Analysis**:
-   - Chapter text sent to `gemini-2.0-flash-exp` for scene identification
+   - Chapter text sent to `gemini-3.0-flash-preview` for scene identification
    - Returns 3 scenes with summaries and location percentages (0-100)
 4. **Image Generation**:
    - Each scene summary converted to an image prompt

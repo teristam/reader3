@@ -24,6 +24,16 @@ logger.add(
     level="DEBUG"
 )
 
+# Add file sink for prompt/response logging (for fine-tuning)
+logger.add(
+    "logs/illustration_prompts_{time:YYYY-MM-DD}.log",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    level="DEBUG",
+    rotation="00:00",  # New file each day
+    retention="30 days",  # Keep logs for 30 days
+    compression="zip"  # Compress old logs
+)
+
 
 def sanitize_chapter_title(title: str, max_length: int = 50) -> str:
     """
@@ -99,7 +109,7 @@ def summarize_scenes(chapter_text: str) -> List[Dict]:
 
     prompt = f"""Analyze the following chapter from a book and identify the 3 most important scenes.
 For each scene, provide:
-1. A brief summary (2-3 sentences)
+1. A detailed summary of the scence used for illustratino generation later, including settings, people and atomsphere (around 500 words)
 2. An approximate location in the text (as a percentage: 0-100, where 0 is the beginning and 100 is the end)
 
 Format your response as JSON with this structure:
@@ -107,17 +117,17 @@ Format your response as JSON with this structure:
     "scenes": [
         {{
             "scene_number": 1,
-            "summary": "Brief description of the scene",
+            "summary": "description of the scene",
             "location_percent": 25
         }},
         {{
             "scene_number": 2,
-            "summary": "Brief description of the scene",
+            "summary": "description of the scene",
             "location_percent": 50
         }},
         {{
             "scene_number": 3,
-            "summary": "Brief description of the scene",
+            "summary": "description of the scene",
             "location_percent": 75
         }}
     ]
@@ -132,9 +142,15 @@ Chapter text:
     logger.debug(f"Model: gemini-2.0-flash-exp")
     logger.debug(f"Prompt length: {len(prompt)} chars")
 
+    # Log full prompt for fine-tuning
+    logger.debug("=" * 80)
+    logger.debug("SCENE ANALYSIS PROMPT:")
+    logger.debug(prompt)
+    logger.debug("=" * 80)
+
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
+            model="gemini-3-flash-preview",
             contents=[prompt]
         )
 
@@ -155,6 +171,12 @@ Chapter text:
 
         logger.debug(f"Full response text length: {len(response_text)} chars")
         logger.trace(f"Response text (first 1000 chars): {response_text[:1000]}")
+
+        # Log full response for fine-tuning
+        logger.debug("=" * 80)
+        logger.debug("SCENE ANALYSIS RESPONSE:")
+        logger.debug(response_text)
+        logger.debug("=" * 80)
 
         # Parse JSON response
         # Sometimes Gemini wraps JSON in markdown code blocks
@@ -243,6 +265,12 @@ def generate_image(prompt: str) -> bytes:
     logger.debug(f"Model: gemini-2.5-flash-image")
     logger.debug(f"Prompt length: {len(prompt)} chars")
 
+    # Log full image prompt for fine-tuning
+    logger.debug("=" * 80)
+    logger.debug("IMAGE GENERATION PROMPT:")
+    logger.debug(prompt)
+    logger.debug("=" * 80)
+
     client = get_gemini_client()
 
     try:
@@ -290,15 +318,24 @@ def generate_image(prompt: str) -> bytes:
                     logger.debug(f"✓ Part {i} has inline_data, extracting image")
 
                     # Use the official as_image() method (returns PIL Image)
-                    image = part.as_image()._pil_image
-                    logger.debug(f"Image type: {type(image)}")
+                    pil_image = part.as_image()._pil_image  # type: ignore
+                    logger.debug(f"Image type: {type(pil_image)}")
 
                     # Convert PIL Image to PNG bytes
                     import io
                     img_byte_arr = io.BytesIO()
-                    image.save(img_byte_arr, format='PNG')
+                    pil_image.save(img_byte_arr, format='PNG')
                     image_bytes = img_byte_arr.getvalue()
                     logger.success(f"✅ Got image using as_image(), length: {len(image_bytes)} bytes")
+
+                    # Log image response metadata for fine-tuning
+                    logger.debug("=" * 80)
+                    logger.debug("IMAGE GENERATION RESPONSE:")
+                    logger.debug(f"  Image size: {pil_image.size}")
+                    logger.debug(f"  Image mode: {pil_image.mode}")
+                    logger.debug(f"  Image format: {pil_image.format}")
+                    logger.debug(f"  Bytes length: {len(image_bytes)}")
+                    logger.debug("=" * 80)
 
                     # Validate size
                     if len(image_bytes) < 1000:
