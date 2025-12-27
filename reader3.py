@@ -4,7 +4,6 @@ Parses an EPUB file into a structured object that can be used to serve the book 
 
 import os
 import pickle
-import shutil
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 from datetime import datetime
@@ -60,10 +59,11 @@ class Book:
     spine: List[ChapterContent]  # The actual content (linear files)
     toc: List[TOCEntry]          # The navigation tree
     images: Dict[str, str]       # Map: original_path -> local_path
+    cover_image: Optional[str] = None  # Relative path to cover image (e.g., 'images/cover.jpg')
 
     # Meta info
-    source_file: str
-    processed_at: str
+    source_file: str = ""
+    processed_at: str = ""
     version: str = "3.0"
 
 
@@ -182,17 +182,17 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
     metadata = extract_metadata_robust(book)
 
     # 3. Prepare Output Directories
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
+    # Create directories without deleting existing content to preserve generated images
     images_dir = os.path.join(output_dir, 'images')
     os.makedirs(images_dir, exist_ok=True)
 
     # 4. Extract Images & Build Map
     print("Extracting images...")
     image_map = {} # Key: internal_path, Value: local_relative_path
+    cover_image_path = None  # Track cover image
 
     for item in book.get_items():
-        if item.get_type() == ebooklib.ITEM_IMAGE:
+        if item.get_type() == ebooklib.ITEM_IMAGE or item.get_type() == ebooklib.ITEM_COVER:
             # Normalize filename
             original_fname = os.path.basename(item.get_name())
             # Sanitize filename for OS
@@ -208,6 +208,20 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
             rel_path = f"images/{safe_fname}"
             image_map[item.get_name()] = rel_path
             image_map[original_fname] = rel_path
+
+            # Detect cover image with priority system
+            # Priority 1: ITEM_COVER type (official EPUB cover designation)
+            if item.get_type() == ebooklib.ITEM_COVER:
+                cover_image_path = rel_path
+                print(f"Found cover (ITEM_COVER): {rel_path}")
+            # Priority 2: filename contains 'cover' (only if no cover found yet)
+            elif cover_image_path is None and 'cover' in original_fname.lower():
+                cover_image_path = rel_path
+                print(f"Found cover (filename): {rel_path}")
+            # Priority 3: first image with '00' prefix (common for front matter)
+            elif cover_image_path is None and original_fname.startswith('00'):
+                cover_image_path = rel_path
+                print(f"Found cover (00 prefix): {rel_path}")
 
     # 5. Process TOC
     print("Parsing Table of Contents...")
@@ -276,6 +290,7 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
         spine=spine_chapters,
         toc=toc_structure,
         images=image_map,
+        cover_image=cover_image_path,
         source_file=os.path.basename(epub_path),
         processed_at=datetime.now().isoformat()
     )

@@ -61,11 +61,19 @@ async def library_view(request: Request):
                 # Try to load it to get the title
                 book = load_book_cached(item)
                 if book:
+                    # Build cover image URL if available
+                    cover_url = None
+                    if book.cover_image:
+                        # Convert 'images/cover.jpg' to '/read/{book_id}/images/cover.jpg'
+                        cover_filename = os.path.basename(book.cover_image)
+                        cover_url = f"/read/{item}/images/{cover_filename}"
+
                     books.append({
                         "id": item,
                         "title": book.metadata.title,
                         "author": ", ".join(book.metadata.authors),
-                        "chapters": len(book.spine)
+                        "chapters": len(book.spine),
+                        "cover_url": cover_url
                     })
 
     return templates.TemplateResponse("library.html", {"request": request, "books": books})
