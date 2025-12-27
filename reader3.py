@@ -248,6 +248,7 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
             soup = BeautifulSoup(raw_content, 'html.parser')
 
             # A. Fix Images
+            # Fix regular <img> tags
             for img in soup.find_all('img'):
                 src = img.get('src', '')
                 if not src: continue
@@ -261,6 +262,30 @@ def process_epub(epub_path: str, output_dir: str) -> Book:
                     img['src'] = image_map[src_decoded]
                 elif filename in image_map:
                     img['src'] = image_map[filename]
+
+            # Fix SVG <image> tags with xlink:href
+            for img in soup.find_all('image'):
+                # Check both xlink:href and href (SVG 2.0)
+                href = img.get('xlink:href') or img.get('href', '')
+                if not href: continue
+
+                # Decode URL
+                href_decoded = unquote(href)
+                filename = os.path.basename(href_decoded)
+
+                # Try to find in map
+                new_path = None
+                if href_decoded in image_map:
+                    new_path = image_map[href_decoded]
+                elif filename in image_map:
+                    new_path = image_map[filename]
+
+                # Update both possible attributes
+                if new_path:
+                    if img.get('xlink:href'):
+                        img['xlink:href'] = new_path
+                    if img.get('href'):
+                        img['href'] = new_path
 
             # B. Clean HTML
             soup = clean_html_content(soup)
@@ -316,7 +341,12 @@ if __name__ == "__main__":
 
     epub_file = sys.argv[1]
     assert os.path.exists(epub_file), "File not found."
-    out_dir = os.path.splitext(epub_file)[0] + "_data"
+
+    # Create books directory and construct output path
+    books_dir = "books"
+    os.makedirs(books_dir, exist_ok=True)
+    book_name = os.path.splitext(os.path.basename(epub_file))[0]
+    out_dir = os.path.join(books_dir, f"{book_name}_data")
 
     book_obj = process_epub(epub_file, out_dir)
     save_to_pickle(book_obj, out_dir)

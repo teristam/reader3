@@ -29,7 +29,7 @@ app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
 # Where are the book folders located?
-BOOKS_DIR = "."
+BOOKS_DIR = "books"
 
 @lru_cache(maxsize=10)
 def load_book_cached(folder_name: str) -> Optional[Book]:
@@ -57,7 +57,8 @@ async def library_view(request: Request):
     # Scan directory for folders ending in '_data' that have a book.pkl
     if os.path.exists(BOOKS_DIR):
         for item in os.listdir(BOOKS_DIR):
-            if item.endswith("_data") and os.path.isdir(item):
+            item_path = os.path.join(BOOKS_DIR, item)
+            if item.endswith("_data") and os.path.isdir(item_path):
                 # Try to load it to get the title
                 book = load_book_cached(item)
                 if book:
