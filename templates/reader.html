@@ -855,7 +855,7 @@
             console.log('[TTS DEBUG] Playing audio:', audioPath);
 
             button.classList.remove('bg-gray-400');
-            button.classList.add('!flex', 'bg-red-500');
+            button.classList.add('!flex', 'bg-red-500', 'playing');
             button.querySelector('.loading-icon').classList.add('hidden');
             button.querySelector('.play-icon').classList.add('hidden');
             button.querySelector('.pause-icon').classList.remove('hidden');
@@ -867,7 +867,7 @@
 
             currentAudio.onended = () => {
                 console.log('[TTS DEBUG] Audio playback ended');
-                button.classList.remove('!flex', 'bg-red-500');
+                button.classList.remove('!flex', 'bg-red-500', 'playing');
                 button.classList.add('bg-primary');
                 button.querySelector('.pause-icon').classList.add('hidden');
                 button.querySelector('.play-icon').classList.remove('hidden');
@@ -877,7 +877,7 @@
 
             currentAudio.onerror = (e) => {
                 console.error('[TTS ERROR] Audio playback error:', e);
-                button.classList.remove('!flex', 'bg-red-500');
+                button.classList.remove('!flex', 'bg-red-500', 'playing');
                 button.classList.add('bg-primary');
                 button.querySelector('.pause-icon').classList.add('hidden');
                 button.querySelector('.play-icon').classList.remove('hidden');
@@ -887,7 +887,7 @@
 
             currentAudio.play().catch(err => {
                 console.error('[TTS ERROR] Audio play error:', err);
-                button.classList.remove('!flex', 'bg-red-500');
+                button.classList.remove('!flex', 'bg-red-500', 'playing');
                 button.classList.add('bg-primary');
                 button.querySelector('.pause-icon').classList.add('hidden');
                 button.querySelector('.play-icon').classList.remove('hidden');
@@ -899,7 +899,7 @@
                 currentAudio.pause();
                 currentAudio.currentTime = 0;
                 if (currentAudio.currentButton) {
-                    currentAudio.currentButton.classList.remove('!flex', 'bg-red-500', 'bg-gray-400');
+                    currentAudio.currentButton.classList.remove('!flex', 'bg-red-500', 'bg-gray-400', 'playing');
                     currentAudio.currentButton.classList.add('bg-primary');
                     currentAudio.currentButton.querySelector('.pause-icon').classList.add('hidden');
                     currentAudio.currentButton.querySelector('.loading-icon').classList.add('hidden');

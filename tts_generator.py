@@ -159,14 +159,14 @@ def save_audio_file(audio_bytes: bytes, book_id: str, para_hash: str) -> str:
 
     Args:
         audio_bytes: WAV audio data
-        book_id: Book directory name
+        book_id: Book directory name (e.g., 'final_empire_data')
         para_hash: Paragraph hash
 
     Returns:
-        Relative path to saved audio file
+        Relative path to saved audio file (relative to book_id)
     """
-    # Ensure audio directory exists
-    audio_dir = os.path.join(book_id, "audio")
+    # Ensure audio directory exists in books/{book_id}/audio/
+    audio_dir = os.path.join("books", book_id, "audio")
     os.makedirs(audio_dir, exist_ok=True)
 
     # Create filename
@@ -179,7 +179,7 @@ def save_audio_file(audio_bytes: bytes, book_id: str, para_hash: str) -> str:
 
     print(f"[TTS DEBUG] Saved audio to: {filepath}")
 
-    # Return relative path
+    # Return relative path (relative to book_id, not including books/)
     return f"audio/{filename}"
 
 
@@ -188,13 +188,13 @@ def get_cached_audio(book_id: str, para_hash: str) -> Optional[str]:
     Check if audio is cached for a paragraph.
 
     Args:
-        book_id: Book directory name
+        book_id: Book directory name (e.g., 'final_empire_data')
         para_hash: Paragraph hash
 
     Returns:
-        Audio path if cached, None otherwise
+        Audio path if cached (relative to book_id), None otherwise
     """
-    metadata_file = os.path.join(book_id, "tts_metadata.json")
+    metadata_file = os.path.join("books", book_id, "tts_metadata.json")
 
     if not os.path.exists(metadata_file):
         return None
@@ -207,7 +207,7 @@ def get_cached_audio(book_id: str, para_hash: str) -> Optional[str]:
             audio_path = metadata[para_hash]["audio_path"]
 
             # Verify file actually exists
-            full_path = os.path.join(book_id, audio_path)
+            full_path = os.path.join("books", book_id, audio_path)
             if os.path.exists(full_path):
                 print(f"[TTS DEBUG] Found cached audio: {audio_path}")
                 return audio_path
@@ -226,14 +226,14 @@ def save_tts_metadata(book_id: str, para_hash: str, audio_path: str, text_previe
     Save metadata about generated TTS audio.
 
     Args:
-        book_id: Book directory name
+        book_id: Book directory name (e.g., 'final_empire_data')
         para_hash: Paragraph hash
-        audio_path: Relative path to audio file
+        audio_path: Relative path to audio file (relative to book_id)
         text_preview: First 100 chars of paragraph
         text_length: Full length of paragraph text
         voice: Voice used for generation
     """
-    metadata_file = os.path.join(book_id, "tts_metadata.json")
+    metadata_file = os.path.join("books", book_id, "tts_metadata.json")
 
     # Load existing metadata
     metadata = {}

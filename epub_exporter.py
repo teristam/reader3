@@ -100,7 +100,8 @@ def collect_images_from_html(html_content: str, book_id: str) -> List[Tuple[str,
         seen_images.add(src)
 
         # Convert relative path to absolute
-        img_path = os.path.join(book_id, src)
+        # book_id is like "dracula_data", need to prepend "books/"
+        img_path = os.path.join("books", book_id, src)
 
         if not os.path.exists(img_path):
             logger.warning(f"Image not found: {img_path}")
