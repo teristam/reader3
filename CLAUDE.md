@@ -11,12 +11,16 @@ reader3 is a lightweight, self-hosted EPUB reader designed for reading books alo
 ### Running the Application
 
 ```bash
-# Process an EPUB file (creates a {book_name}_data directory)
+# Process an EPUB file (creates a books/{book_name}_data directory)
 uv run reader3.py <file.epub>
 
 # Start the web server (default: http://127.0.0.1:8123)
 uv run server.py
 ```
+
+**Note**: Books are stored in the `books/` directory:
+- `books/{book_name}.epub` - Original EPUB files
+- `books/{book_name}_data/` - Processed book data (book.pkl, images, metadata)
 
 ### Managing Dependencies
 
@@ -35,8 +39,8 @@ uv add <package-name>
 1. **EPUB Processing** ([reader3.py](reader3.py))
    - `process_epub()` extracts and processes EPUB files
    - Creates a `Book` object containing metadata, spine (chapters), TOC, and images
-   - Saves processed data as `book.pkl` in `{book_name}_data/` directory
-   - Images are extracted to `{book_name}_data/images/`
+   - Saves processed data as `book.pkl` in `books/{book_name}_data/` directory
+   - Images are extracted to `books/{book_name}_data/images/`
 
 2. **Web Server** ([server.py](server.py))
    - FastAPI application serving the reader interface
@@ -45,8 +49,11 @@ uv add <package-name>
 
 3. **AI Illustrations** ([illustration_generator.py](illustration_generator.py))
    - Optional feature requiring `GEMINI_API_KEY` environment variable
+   - Uses **sentence-based anchoring** (schema v2) for precise illustration placement
+   - Gemini identifies exact sentences where illustrations should appear (before key action)
+   - Falls back to percentage-based placement if text matching fails
    - Generates 3 illustrations per chapter using Gemini 2.0 Flash (scene analysis) and Gemini 2.5 Flash Image (image generation)
-   - Images cached in `{book_name}_data/images/` with metadata in `generated_images.json`
+   - Images cached in `books/{book_name}_data/images/` with metadata in `generated_images.json`
 
 ### Key Data Structures
 
@@ -65,11 +72,14 @@ Book
 ### File Storage Structure
 
 ```
-{book_name}_data/
-├── book.pkl                    # Serialized Book object
-├── images/                     # Extracted EPUB images
-│   └── *.jpg, *.png
-└── generated_images.json       # AI illustration metadata (optional)
+books/
+├── {book_name}.epub                      # Original EPUB file
+└── {book_name}_data/
+    ├── book.pkl                          # Serialized Book object
+    ├── images/                           # Extracted EPUB images + generated illustrations
+    │   ├── *.jpg, *.png                  # Original EPUB images
+    │   └── generated_ch*_scene*.png      # AI-generated illustrations
+    └── generated_images.json             # AI illustration metadata (optional)
 ```
 
 ## AI Illustration System
@@ -89,32 +99,74 @@ export GEMINI_API_KEY=your_api_key_here
    - Runs 3 chapters in parallel using asyncio semaphore (prevents API rate limiting)
    - Shows real-time progress: "Generating 5/12 chapters..."
    - Progress persists across page refreshes via `batch_{uuid}.json` files
-3. **Scene Analysis**:
+3. **Scene Analysis** (Schema v2 - Sentence-Based Anchoring):
    - Chapter text sent to `gemini-3.0-flash-preview` for scene identification
-   - Returns 3 scenes with summaries and location percentages (0-100)
+   - Gemini returns 3 scenes with:
+     - Detailed visual summary (500 words)
+     - **`insert_after_text`**: Exact sentence from chapter where illustration should appear
+     - **`location_percent`**: Fallback percentage (0-100) if text matching fails
+   - Prompt instructs Gemini to choose sentences BEFORE key action (to set scene, not spoil)
 4. **Image Generation**:
    - Each scene summary converted to an image prompt
    - Images generated using `gemini-2.5-flash-image` model
    - Saved as `generated_ch{N}_scene{1-3}.png`
-5. **HTML Injection**:
-   - Images injected into chapter HTML at calculated paragraph positions
-   - Position based on scene location percentages
+5. **HTML Injection with Smart Matching**:
+   - System searches for paragraph containing the anchor sentence using:
+     1. **Exact match** (case-insensitive substring)
+     2. **Fuzzy match** (80% similarity threshold via rapidfuzz)
+     3. **Partial match** (85% threshold for substring matching)
+   - Falls back to percentage-based placement if no match above threshold
+   - Images inserted immediately AFTER the matched paragraph
+   - Comprehensive logging shows matching scores and placement decisions
 
 ### Caching Strategy
 
 - Generated images are cached in the book's `images/` directory
-- Metadata stored in `generated_images.json` with format:
+- Metadata stored in `generated_images.json` with **Schema v2** format:
   ```json
   {
     "0": {
       "images": ["images/generated_ch0_scene1.png", ...],
-      "scene_locations": [25, 50, 75]
+      "scene_locations": [25, 50, 75],
+      "anchor_texts": [
+        "The sky darkened as storm clouds gathered.",
+        "He approached the ancient door.",
+        null
+      ],
+      "status": "completed",
+      "schema_version": 2
     }
   }
   ```
-- `get_cached_images()` checks cache before generation
+- **Backward compatibility**: Books with old metadata (no `anchor_texts`) use percentage-based placement
+- `get_cached_images()` validates all 3 images exist before returning cached paths
 
 ## Important Implementation Details
+
+### Sentence-Based Illustration Anchoring (Schema v2)
+
+The illustration system uses intelligent text matching to place images at semantically meaningful points:
+
+**How it works:**
+1. **Gemini selects anchor sentences**: For each scene, Gemini identifies the exact sentence that should appear before the illustration
+2. **Smart matching** ([illustration_generator.py:find_insertion_point](illustration_generator.py#L698-L811)):
+   - **Exact match**: Fast case-insensitive substring search
+   - **Fuzzy match**: 80% similarity threshold using rapidfuzz (handles minor variations)
+   - **Partial match**: 85% threshold for substring matching
+   - **Fallback**: Uses percentage-based placement if no match above threshold
+3. **Insertion**: Image inserted immediately AFTER the paragraph containing the anchor sentence
+4. **Logging**: All matching scores and decisions logged for debugging
+
+**Why sentence-based instead of percentage?**
+- LLMs are poor at estimating percentages accurately
+- Percentages don't account for paragraph density variations
+- Sentence-based placement ensures images appear BEFORE key action (to set scene, not spoil)
+
+**Example:**
+- Gemini provides: `"insert_after_text": "The sky darkened as storm clouds gathered."`
+- System finds paragraph containing this sentence (e.g., paragraph 15)
+- Image inserted after paragraph 15, before next paragraph describing the action
+- Result: Illustration sets atmospheric context before dramatic events unfold
 
 ### HTML Processing
 
@@ -189,4 +241,6 @@ Per the README, this is a "90% vibe coded" project meant as inspiration rather t
 After you have completed your work. Use the playwright MCP to check the web app is working as intended
 
 ## Things to take note
-- the Image object returned by `part.as_image()` is not a PIL image. It is a special  class of the Google genai package. It has `save(filename)` function which save the data as a image file. Note there is not `format` parameter there. You can use `part.as_image()._pil_image` to get the PIL image.
+- The Image object returned by `part.as_image()` is not a PIL image. It is a special class of the Google genai package. It has `save(filename)` function which save the data as a image file. Note there is not `format` parameter there. You can use `part.as_image()._pil_image` to get the PIL image.
+- The illustration system uses **rapidfuzz** for fuzzy text matching. The library is fast (C-accelerated) and provides both full ratio and partial ratio similarity scoring.
+- All illustration placement decisions are logged with scores and matched text for debugging. Check logs when investigating placement issues.

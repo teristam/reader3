@@ -6,6 +6,7 @@ import asyncio
 from functools import lru_cache
 from typing import Optional, List
 
+from loguru import logger
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +31,16 @@ templates = Jinja2Templates(directory="templates")
 
 # Where are the book folders located?
 BOOKS_DIR = "books"
+
+def get_book_path(book_id: str) -> str:
+    """
+    Construct full path to book directory.
+    Args:
+        book_id: The book folder name (e.g., 'final_empire_data')
+    Returns:
+        Full path (e.g., 'books/final_empire_data')
+    """
+    return os.path.join(BOOKS_DIR, book_id)
 
 @lru_cache(maxsize=10)
 def load_book_cached(folder_name: str) -> Optional[Book]:
@@ -89,15 +100,16 @@ def get_chapter_with_images(book_id: str, chapter_index: int, chapter_content: s
     Get chapter HTML with images injected if available.
     """
     # Check for cached images
-    cached_images = get_cached_images(book_id, chapter_index)
-    
+    book_path = get_book_path(book_id)
+    cached_images = get_cached_images(book_path, chapter_index)
+
     if cached_images:
-        # Try to load scene locations from metadata if available
-        # Otherwise use default distribution
-        scene_locations = [25, 50, 75]  # Default: distribute evenly
-        
-        # Try to get scene locations from metadata
-        metadata_file = os.path.join(book_id, "generated_images.json")
+        # Load both scene locations and anchor texts from metadata
+        scene_locations = [25, 50, 75]  # Default fallback
+        anchor_texts = None  # NEW: Will be None if not available
+
+        # Try to get both from metadata
+        metadata_file = os.path.join(book_path, "generated_images.json")
         if os.path.exists(metadata_file):
             try:
                 with open(metadata_file, "r") as f:
@@ -105,14 +117,25 @@ def get_chapter_with_images(book_id: str, chapter_index: int, chapter_content: s
                 chapter_key = str(chapter_index)
                 if chapter_key in metadata:
                     chapter_data = metadata[chapter_key]
-                    if isinstance(chapter_data, dict) and "scene_locations" in chapter_data:
-                        scene_locations = chapter_data["scene_locations"]
-            except:
-                pass
-        
-        # Inject images into HTML
-        return inject_images_into_html(chapter_content, cached_images, scene_locations)
-    
+                    if isinstance(chapter_data, dict):
+                        # Load scene locations (backward compatible)
+                        if "scene_locations" in chapter_data:
+                            scene_locations = chapter_data["scene_locations"]
+                        # Load anchor texts (NEW - only in schema v2)
+                        if "anchor_texts" in chapter_data:
+                            anchor_texts = chapter_data["anchor_texts"]
+                            logger.info(f"Loaded anchor texts for chapter {chapter_index}: {len(anchor_texts)} scenes")
+            except Exception as e:
+                logger.error(f"Error reading metadata: {e}")
+
+        # Inject images into HTML with both anchor texts and fallback percentages
+        return inject_images_into_html(
+            chapter_content,
+            cached_images,
+            scene_locations,
+            anchor_texts  # NEW: Pass anchor texts (can be None for old metadata)
+        )
+
     return chapter_content
 
 
@@ -121,9 +144,10 @@ def get_illustrations_map(book_id: str, spine_length: int) -> dict:
     Build a map of chapter indices to illustration availability.
     Returns dict: {chapter_index: has_illustrations}
     """
+    book_path = get_book_path(book_id)
     illustrations_map = {}
     for chapter_idx in range(spine_length):
-        cached_images = get_cached_images(book_id, chapter_idx)
+        cached_images = get_cached_images(book_path, chapter_idx)
         illustrations_map[chapter_idx] = (cached_images is not None and len(cached_images) > 0)
     return illustrations_map
 
@@ -141,7 +165,8 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int, backg
     current_chapter = book.spine[chapter_index]
 
     # Check if images exist
-    cached_images = get_cached_images(book_id, chapter_index)
+    book_path = get_book_path(book_id)
+    cached_images = get_cached_images(book_path, chapter_index)
     has_images = cached_images is not None
 
     # Inject images if available
@@ -153,7 +178,7 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int, backg
         # Trigger background generation (non-blocking)
         background_tasks.add_task(
             generate_illustrations_for_chapter,
-            book_id,
+            book_path,
             chapter_index,
             current_chapter.text,
             book.metadata.title,  # Pass book title for thematic context
@@ -210,10 +235,11 @@ async def generate_illustrations_endpoint(book_id: str, chapter_index: int, back
     print(f"[DEBUG] Chapter text length: {len(current_chapter.text)} chars")
 
     # Trigger generation in background with force_regenerate=True
+    book_path = get_book_path(book_id)
     print(f"[DEBUG] Adding background task for illustration generation (force regenerate)...")
     background_tasks.add_task(
         generate_illustrations_for_chapter,
-        book_id,
+        book_path,
         chapter_index,
         current_chapter.text,
         book.metadata.title,  # Pass book title for thematic context
@@ -233,12 +259,14 @@ async def generate_illustrations_endpoint(book_id: str, chapter_index: int, back
 @app.get("/read/{book_id}/{chapter_index}/illustration-status")
 async def illustration_status(book_id: str, chapter_index: int):
     """Check if illustrations exist for a chapter."""
-    cached_images = get_cached_images(book_id, chapter_index)
+    book_path = get_book_path(book_id)
+    cached_images = get_cached_images(book_path, chapter_index)
 
-    # Load metadata to check for status and errors
+    # Load metadata to check for status, errors, and current progress
     status = "unknown"
     error_message = None
-    metadata_file = os.path.join(book_id, "generated_images.json")
+    current_image_count = 0
+    metadata_file = os.path.join(book_path, "generated_images.json")
 
     if os.path.exists(metadata_file):
         try:
@@ -250,6 +278,7 @@ async def illustration_status(book_id: str, chapter_index: int):
                 if isinstance(chapter_data, dict):
                     status = chapter_data.get("status", "completed")
                     error_message = chapter_data.get("error")
+                    current_image_count = chapter_data.get("current_image_count", 0)
 
         except Exception as e:
             print(f"Error reading metadata: {e}")
@@ -258,7 +287,8 @@ async def illustration_status(book_id: str, chapter_index: int):
         "has_illustrations": cached_images is not None,
         "image_count": len(cached_images) if cached_images else 0,
         "status": status,
-        "error": error_message
+        "error": error_message,
+        "current_image_count": current_image_count  # NEW: Progress tracking
     })
 
 @app.get("/read/{book_id}/images/{image_name}")
@@ -296,7 +326,8 @@ async def batch_generate_all_illustrations(book_id: str, book: Book, batch_id: s
     print(f"[BATCH DEBUG] Starting batch generation {batch_id} for {book_id}")
 
     # Initialize progress file
-    progress_file = os.path.join(book_id, f"batch_{batch_id}.json")
+    book_path = get_book_path(book_id)
+    progress_file = os.path.join(book_path, f"batch_{batch_id}.json")
 
     # Filter chapters by word count (1000+ words)
     eligible_chapters = []
@@ -335,14 +366,14 @@ async def batch_generate_all_illustrations(book_id: str, book: Book, batch_id: s
 
             try:
                 # Check if already has illustrations
-                cached = get_cached_images(book_id, chapter_idx)
+                cached = get_cached_images(book_path, chapter_idx)
                 if cached and len(cached) >= 3:
                     print(f"[BATCH DEBUG] Chapter {chapter_idx} already has illustrations, skipping")
                 else:
                     # Generate illustrations (runs in thread pool since it's sync)
                     await asyncio.to_thread(
                         generate_illustrations_for_chapter,
-                        book_id,
+                        book_path,
                         chapter_idx,
                         chapter.text,
                         book.metadata.title,
@@ -414,7 +445,8 @@ async def generate_all_illustrations_endpoint(book_id: str, background_tasks: Ba
 @app.get("/read/{book_id}/batch-status/{batch_id}")
 async def batch_status_endpoint(book_id: str, batch_id: str):
     """Check status of batch illustration generation."""
-    progress_file = os.path.join(book_id, f"batch_{batch_id}.json")
+    book_path = get_book_path(book_id)
+    progress_file = os.path.join(book_path, f"batch_{batch_id}.json")
 
     if not os.path.exists(progress_file):
         return JSONResponse({

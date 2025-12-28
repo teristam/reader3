@@ -107,10 +107,26 @@ def summarize_scenes(chapter_text: str) -> List[Dict]:
 
     client = get_gemini_client()
 
-    prompt = f"""Analyze the following chapter from a book and identify the 3 most important scenes.
+    prompt = f"""Analyze the following chapter from a book and identify the 3 most important scenes to illustrate.
+
+CRITICAL PLACEMENT INSTRUCTION:
+For each scene, identify the exact sentence that should appear BEFORE the illustration.
+- The illustration will be inserted immediately AFTER the paragraph containing this sentence
+- Choose a sentence that sets up the scene BEFORE key action begins (to establish context, not spoil it)
+- This should be a moment of anticipation, setup, or arrival - NOT during the climax
+- The anchor sentence should be distinctive and unique to avoid false matches
+- Avoid generic phrases like "he said" or "she walked" - choose sentences with specific details
+
 For each scene, provide:
-1. A detailed summary of the scence used for illustratino generation later, including settings, people and atomsphere (around 500 words)
-2. An approximate location in the text (as a percentage: 0-100, where 0 is the beginning and 100 is the end)
+1. A detailed summary of the scene for illustration generation (around 500 words) including settings, people and atmosphere
+2. The exact sentence that appears in the paragraph before the illustration (verbatim from the text)
+3. An approximate location as a percentage (0-100) as a fallback if text matching fails
+
+EXAMPLE:
+If the text contains: "The sky darkened as storm clouds gathered. He approached the ancient door, hand trembling."
+And you want the illustration to appear after "storm clouds gathered", provide:
+- insert_after_text: "The sky darkened as storm clouds gathered."
+- The illustration will be inserted after the paragraph containing this sentence
 
 Format your response as JSON with this structure:
 {{
@@ -118,16 +134,19 @@ Format your response as JSON with this structure:
         {{
             "scene_number": 1,
             "summary": "description of the scene",
+            "insert_after_text": "The exact sentence from the chapter.",
             "location_percent": 25
         }},
         {{
             "scene_number": 2,
             "summary": "description of the scene",
+            "insert_after_text": "Another exact sentence from the chapter.",
             "location_percent": 50
         }},
         {{
             "scene_number": 3,
             "summary": "description of the scene",
+            "insert_after_text": "A third exact sentence from the chapter.",
             "location_percent": 75
         }}
     ]
@@ -194,17 +213,30 @@ Chapter text:
         scenes = data.get("scenes", [])
         logger.info(f"Found {len(scenes)} scenes in response")
 
+        # Validate both fields exist in each scene
+        for scene in scenes:
+            if "insert_after_text" not in scene:
+                logger.warning(f"Scene {scene.get('scene_number')} missing insert_after_text, will use percentage fallback")
+                scene["insert_after_text"] = None
+            if "location_percent" not in scene:
+                logger.warning(f"Scene {scene.get('scene_number')} missing location_percent, using default")
+                scene["location_percent"] = 33 * (scene.get("scene_number", 1) - 1)
+
         # Ensure we have exactly 3 scenes, pad if needed
         while len(scenes) < 3:
             scenes.append({
                 "scene_number": len(scenes) + 1,
                 "summary": "A scene from the chapter",
+                "insert_after_text": None,
                 "location_percent": 33 * len(scenes)
             })
 
         logger.info(f"Returning {len(scenes[:3])} scenes")
         for i, scene in enumerate(scenes[:3]):
-            logger.debug(f"Scene {i+1}: number={scene.get('scene_number')}, location={scene.get('location_percent')}%, summary_length={len(scene.get('summary', ''))}")
+            anchor_preview = scene.get('insert_after_text', 'None')
+            if anchor_preview and len(anchor_preview) > 60:
+                anchor_preview = anchor_preview[:60] + "..."
+            logger.debug(f"Scene {i+1}: number={scene.get('scene_number')}, location={scene.get('location_percent')}%, anchor='{anchor_preview}', summary_length={len(scene.get('summary', ''))}")
 
         return scenes[:3]  # Return only first 3
 
@@ -216,9 +248,9 @@ Chapter text:
         # Fallback: create generic scenes
         logger.warning("⚠️ Using fallback scenes")
         return [
-            {"scene_number": 1, "summary": "An important scene from the chapter", "location_percent": 25},
-            {"scene_number": 2, "summary": "Another important scene from the chapter", "location_percent": 50},
-            {"scene_number": 3, "summary": "A third important scene from the chapter", "location_percent": 75},
+            {"scene_number": 1, "summary": "An important scene from the chapter", "insert_after_text": None, "location_percent": 25},
+            {"scene_number": 2, "summary": "Another important scene from the chapter", "insert_after_text": None, "location_percent": 50},
+            {"scene_number": 3, "summary": "A third important scene from the chapter", "insert_after_text": None, "location_percent": 75},
         ]
     except Exception as e:
         logger.exception(f"❌ Exception in summarize_scenes: {type(e).__name__}: {str(e)}")
@@ -469,7 +501,16 @@ def get_cached_images(book_id: str, chapter_index: int) -> Optional[List[str]]:
         return None
 
 
-def save_image_metadata(book_id: str, chapter_index: int, image_paths: List[str], scene_locations: Optional[List[int]] = None, status: str = "completed", error: Optional[str] = None):
+def save_image_metadata(
+    book_id: str,
+    chapter_index: int,
+    image_paths: List[str],
+    scene_locations: Optional[List[int]] = None,
+    anchor_texts: Optional[List[Optional[str]]] = None,
+    status: str = "completed",
+    error: Optional[str] = None,
+    current_image_count: Optional[int] = None
+):
     """
     Save metadata about generated images to track caching.
 
@@ -477,9 +518,11 @@ def save_image_metadata(book_id: str, chapter_index: int, image_paths: List[str]
         book_id: The book directory name
         chapter_index: Index of the chapter
         image_paths: List of generated image paths
-        scene_locations: Optional list of scene location percentages
+        scene_locations: Optional list of scene location percentages (fallback)
+        anchor_texts: Optional list of anchor sentences for precise placement
         status: Generation status - "generating", "completed", or "error"
         error: Error message if status is "error"
+        current_image_count: Number of images completed so far (for progress tracking)
     """
     metadata_file = os.path.join(book_id, "generated_images.json")
 
@@ -496,12 +539,17 @@ def save_image_metadata(book_id: str, chapter_index: int, image_paths: List[str]
     chapter_key = str(chapter_index)
     chapter_data = {
         "images": image_paths,
-        "status": status
+        "status": status,
+        "schema_version": 2  # Track schema version for backward compatibility
     }
     if scene_locations:
         chapter_data["scene_locations"] = scene_locations
+    if anchor_texts:
+        chapter_data["anchor_texts"] = anchor_texts
     if error:
         chapter_data["error"] = error
+    if current_image_count is not None:
+        chapter_data["current_image_count"] = current_image_count
     metadata[chapter_key] = chapter_data
 
     # Save back
@@ -576,7 +624,7 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
                 logger.error(f"❌ Error cleaning up old images: {e}")
 
     # Mark as generating
-    save_image_metadata(book_id, chapter_index, [], status="generating")
+    save_image_metadata(book_id, chapter_index, [], status="generating", current_image_count=0)
     logger.info("🆕 Generating new images...")
 
     try:
@@ -587,6 +635,7 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
 
         image_paths = []
         scene_locations = []
+        anchor_texts = []  # NEW: Collect anchor texts
 
         for i, scene in enumerate(scenes):
             logger.info("=" * 60)
@@ -595,10 +644,16 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
             scene_num = scene["scene_number"]
             scene_summary = scene["summary"]
             scene_location = scene.get("location_percent", 33 * (scene_num - 1))
+            scene_anchor = scene.get("insert_after_text")  # NEW: Extract anchor text
+
             scene_locations.append(scene_location)
+            anchor_texts.append(scene_anchor)  # NEW: Store anchor text
 
             logger.info(f"Summary: {scene_summary[:100]}...")
             logger.info(f"Location: {scene_location}%")
+            if scene_anchor:
+                anchor_preview = scene_anchor if len(scene_anchor) <= 80 else scene_anchor[:80] + "..."
+                logger.info(f"Anchor text: '{anchor_preview}'")
 
             try:
                 # Create image prompt
@@ -620,6 +675,18 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
                 logger.success(f"✅ Saved image to: {img_path}")
                 image_paths.append(img_path)
 
+                # Update progress after each image
+                save_image_metadata(
+                    book_id,
+                    chapter_index,
+                    image_paths,
+                    scene_locations[:i+1],  # Only include locations for completed images
+                    anchor_texts[:i+1],     # Only include anchors for completed images
+                    status="generating",
+                    current_image_count=len(image_paths)
+                )
+                logger.info(f"📊 Progress: {len(image_paths)}/3 images completed")
+
             except Exception as e:
                 logger.error("=" * 60)
                 logger.error(f"❌ ERROR processing scene {i+1}")
@@ -630,9 +697,9 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
                 # Re-raise to stop generation - we don't want partial results
                 raise Exception(f"Failed to generate image for scene {i+1}: {str(e)}") from e
 
-        # Save metadata with scene locations
+        # Save metadata with scene locations and anchor texts
         logger.info("💾 Step 5: Saving metadata...")
-        save_image_metadata(book_id, chapter_index, image_paths, scene_locations, status="completed")
+        save_image_metadata(book_id, chapter_index, image_paths, scene_locations, anchor_texts, status="completed")
         logger.success("=" * 60)
         logger.success("🎉 GENERATION COMPLETE!")
         logger.success("=" * 60)
@@ -663,52 +730,177 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
         raise
 
 
-def inject_images_into_html(html_content: str, image_paths: List[str], scene_locations: List[int]) -> str:
+def find_insertion_point(
+    paragraphs: List,
+    anchor_text: Optional[str],
+    fallback_percent: int,
+    scene_number: int
+) -> int:
+    """
+    Find the paragraph index after which to insert an illustration.
+
+    Searches for the paragraph containing the anchor sentence, then inserts after it.
+    Uses fuzzy matching with threshold, falls back to percentage if no good match.
+
+    Args:
+        paragraphs: List of BeautifulSoup paragraph tags
+        anchor_text: The sentence that should appear in the paragraph before insertion (from Gemini)
+        fallback_percent: Percentage-based location (0-100) as fallback
+        scene_number: Scene number for logging
+
+    Returns:
+        Paragraph index (0-based) - illustration will be inserted AFTER this paragraph
+    """
+    # Fallback if no anchor text
+    if not anchor_text or not anchor_text.strip():
+        logger.warning(f"Scene {scene_number}: No anchor text, using percentage ({fallback_percent}%)")
+        para_idx = int((fallback_percent / 100) * len(paragraphs))
+        return min(para_idx, len(paragraphs) - 1)
+
+    # Try fuzzy matching
+    try:
+        from rapidfuzz import fuzz
+    except ImportError:
+        logger.error("rapidfuzz not installed, falling back to percentage")
+        para_idx = int((fallback_percent / 100) * len(paragraphs))
+        return min(para_idx, len(paragraphs) - 1)
+
+    # Extract text from all paragraphs (cache to avoid repeated calls)
+    paragraph_texts = [para.get_text(separator=' ', strip=True) for para in paragraphs]
+
+    # Configuration
+    SIMILARITY_THRESHOLD = 80  # Require 80% similarity (0-100 scale)
+    PARTIAL_THRESHOLD = 85     # Higher threshold for partial matching
+
+    # Clean anchor text
+    anchor_clean = ' '.join(anchor_text.split())
+
+    # Try exact match first (case-insensitive)
+    # Find paragraph containing the anchor sentence
+    for i, para_text in enumerate(paragraph_texts):
+        if anchor_clean.lower() in para_text.lower():
+            logger.success(f"Scene {scene_number}: Exact match found in paragraph {i}")
+            logger.debug(f"  Anchor sentence: '{anchor_clean[:80]}...'")
+            logger.debug(f"  Found in paragraph: '{para_text[:100]}...'")
+            logger.info(f"  → Illustration will be inserted AFTER paragraph {i}")
+            return i
+
+    # Try fuzzy matching with full ratio
+    best_match_idx = -1
+    best_match_score = 0
+
+    for i, para_text in enumerate(paragraph_texts):
+        score = fuzz.ratio(anchor_clean.lower(), para_text.lower())
+        if score > best_match_score:
+            best_match_score = score
+            best_match_idx = i
+
+    # Check if best match exceeds threshold
+    if best_match_score >= SIMILARITY_THRESHOLD:
+        logger.success(f"Scene {scene_number}: Fuzzy match (score={best_match_score:.1f}) found in paragraph {best_match_idx}")
+        logger.debug(f"  Anchor sentence: '{anchor_clean[:80]}...'")
+        logger.debug(f"  Matched paragraph: '{paragraph_texts[best_match_idx][:80]}...'")
+        logger.info(f"  → Illustration will be inserted AFTER paragraph {best_match_idx}")
+        return best_match_idx
+
+    # Try partial ratio (substring matching)
+    best_partial_idx = -1
+    best_partial_score = 0
+
+    for i, para_text in enumerate(paragraph_texts):
+        score = fuzz.partial_ratio(anchor_clean.lower(), para_text.lower())
+        if score > best_partial_score:
+            best_partial_score = score
+            best_partial_idx = i
+
+    if best_partial_score >= PARTIAL_THRESHOLD:
+        logger.success(f"Scene {scene_number}: Partial match (score={best_partial_score:.1f}) found in paragraph {best_partial_idx}")
+        logger.debug(f"  Anchor sentence: '{anchor_clean[:80]}...'")
+        logger.debug(f"  Matched paragraph: '{paragraph_texts[best_partial_idx][:80]}...'")
+        logger.info(f"  → Illustration will be inserted AFTER paragraph {best_partial_idx}")
+        return best_partial_idx
+
+    # No good match - fall back to percentage
+    logger.warning(
+        f"Scene {scene_number}: No match above threshold "
+        f"(best={best_match_score:.1f}/{best_partial_score:.1f}), "
+        f"using percentage ({fallback_percent}%)"
+    )
+    logger.debug(f"  Failed anchor: '{anchor_clean[:100]}...'")
+    if best_match_idx >= 0:
+        logger.debug(f"  Best match: '{paragraph_texts[best_match_idx][:100]}...'")
+
+    para_idx = int((fallback_percent / 100) * len(paragraphs))
+    return min(para_idx, len(paragraphs) - 1)
+
+
+def inject_images_into_html(
+    html_content: str,
+    image_paths: List[str],
+    scene_locations: List[int],
+    anchor_texts: Optional[List[Optional[str]]] = None
+) -> str:
     """
     Inject image HTML into chapter content at appropriate locations.
-    
+
     Args:
         html_content: Original HTML content
         image_paths: List of image paths (relative, e.g., "images/generated_ch0_scene1.png")
-        scene_locations: List of location percentages (0-100) for each scene
-    
+        scene_locations: List of location percentages (0-100) for each scene (fallback)
+        anchor_texts: List of anchor sentences for precise placement (optional)
+
     Returns:
         Modified HTML with images inserted
     """
     if not image_paths:
         return html_content
-    
+
     soup = BeautifulSoup(html_content, 'html.parser')
-    
+
     # Find all paragraphs
     paragraphs = soup.find_all('p')
-    
+
     if not paragraphs:
         # If no paragraphs, just append images at the end
+        logger.warning("No paragraphs found in HTML, appending images at end")
         for img_path in image_paths:
             img_tag = soup.new_tag('img', src=img_path)
             img_tag['style'] = 'max-width: 100%; height: auto; display: block; margin: 20px auto;'
             soup.append(img_tag)
         return str(soup)
-    
-    # Calculate insertion points based on scene locations
+
+    # Calculate insertion points using new smart matching
     insertion_points = []
-    for i, loc_percent in enumerate(scene_locations):
-        # Convert percentage to paragraph index
-        para_idx = int((loc_percent / 100) * len(paragraphs))
-        para_idx = min(para_idx, len(paragraphs) - 1)
+    for i in range(len(image_paths)):
+        # Get anchor text (handle None or missing)
+        anchor_text = None
+        if anchor_texts and i < len(anchor_texts):
+            anchor_text = anchor_texts[i]
+
+        # Get fallback percentage
+        fallback_percent = scene_locations[i] if i < len(scene_locations) else 50
+
+        # Find insertion point (uses new find_insertion_point function)
+        para_idx = find_insertion_point(
+            paragraphs=paragraphs,
+            anchor_text=anchor_text,
+            fallback_percent=fallback_percent,
+            scene_number=i + 1
+        )
+
         insertion_points.append((para_idx, image_paths[i]))
-    
+        logger.info(f"Scene {i+1}: Will insert after paragraph {para_idx}/{len(paragraphs)}")
+
     # Sort by paragraph index (descending) so we can insert without shifting indices
     insertion_points.sort(reverse=True, key=lambda x: x[0])
-    
+
     # Insert images after the specified paragraphs
     for para_idx, img_path in insertion_points:
         if para_idx < len(paragraphs):
             para = paragraphs[para_idx]
             img_tag = soup.new_tag('img', src=img_path)
             img_tag['style'] = 'max-width: 100%; height: auto; display: block; margin: 20px auto;'
-            img_tag['alt'] = f'Generated illustration for scene'
+            img_tag['alt'] = 'Generated illustration for scene'
             # Insert after the paragraph
             para.insert_after(img_tag)
     

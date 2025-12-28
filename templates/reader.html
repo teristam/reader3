@@ -534,7 +534,7 @@
             // Disable button and show loading
             btn.disabled = true;
             btnText.innerHTML = '<span class="inline-block w-4 h-4 border-2 border-gray-200 border-t-primary rounded-full animate-spin mr-2"></span>Generating...';
-            statusDiv.textContent = 'Generating...';
+            statusDiv.textContent = 'Generating (0/3)...';
             statusDiv.classList.remove('hidden');
 
             try {
@@ -567,6 +567,13 @@
                             const statusResponse = await fetch(`/read/${bookId}/${chapterIndex}/illustration-status`);
                             const statusData = await statusResponse.json();
                             console.log(`[DEBUG] Poll ${attempts} - Status:`, JSON.stringify(statusData, null, 2));
+
+                            // Update progress indicator with current image count
+                            if (statusData.status === 'generating' && statusData.current_image_count !== undefined) {
+                                const progress = statusData.current_image_count || 0;
+                                statusDiv.textContent = `Generating (${progress}/3)...`;
+                                console.log(`[DEBUG] Progress update: ${progress}/3 images`);
+                            }
 
                             // Check for error status
                             if (statusData.status === 'error') {
