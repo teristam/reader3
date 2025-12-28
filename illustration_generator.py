@@ -9,6 +9,10 @@ import traceback
 from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 from loguru import logger
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 try:
     from google import genai

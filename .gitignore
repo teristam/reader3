@@ -16,3 +16,4 @@ logs/*
 
 .playwright-mcp
 books/
+.env

@@ -10,6 +10,10 @@ import base64
 import io
 from datetime import datetime
 from typing import Optional, Dict
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 try:
     from google import genai
