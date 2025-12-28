@@ -46,13 +46,13 @@ def generate_paragraph_hash(paragraph_text: str) -> str:
     return hashlib.md5(paragraph_text.encode('utf-8')).hexdigest()[:16]
 
 
-def generate_tts_audio(text: str, voice_name: str = "Kore") -> bytes:
+def generate_tts_audio(text: str, voice_name: str = "Enceladus") -> bytes:
     """
     Call Gemini API to generate text-to-speech audio.
 
     Args:
         text: The text to convert to speech
-        voice_name: Voice to use (default: "Kore")
+        voice_name: Voice to use (default: "Enceladus")
 
     Returns:
         Raw PCM audio bytes (24kHz, 16-bit, mono)
@@ -64,10 +64,15 @@ def generate_tts_audio(text: str, voice_name: str = "Kore") -> bytes:
     client = get_gemini_client()
 
     try:
+        # Prepare prompt with style guidance
+        prompt = f"""You are narrating an audio book. Speak in a voice that is appropriate to the content of the text.
+
+{text}"""
+
         # Generate audio using Gemini TTS API
         response = client.models.generate_content(
             model="gemini-2.5-flash-preview-tts",
-            contents=text,
+            contents=prompt,
             config={
                 "response_modalities": ["AUDIO"],
                 "speech_config": {
@@ -221,7 +226,7 @@ def get_cached_audio(book_id: str, para_hash: str) -> Optional[str]:
         return None
 
 
-def save_tts_metadata(book_id: str, para_hash: str, audio_path: str, text_preview: str, text_length: int, voice: str = "Kore"):
+def save_tts_metadata(book_id: str, para_hash: str, audio_path: str, text_preview: str, text_length: int, voice: str = "Enceladus"):
     """
     Save metadata about generated TTS audio.
 
@@ -260,14 +265,14 @@ def save_tts_metadata(book_id: str, para_hash: str, audio_path: str, text_previe
     print(f"[TTS DEBUG] Saved metadata for hash: {para_hash}")
 
 
-def generate_tts_for_paragraph(book_id: str, para_text: str, voice: str = "Kore") -> Dict:
+def generate_tts_for_paragraph(book_id: str, para_text: str, voice: str = "Enceladus") -> Dict:
     """
     Main function to generate TTS audio for a paragraph.
 
     Args:
         book_id: Book directory name
         para_text: Paragraph text
-        voice: Voice to use (default: "Kore")
+        voice: Voice to use (default: "Enceladus")
 
     Returns:
         Dictionary with status, audio_path, and para_hash
