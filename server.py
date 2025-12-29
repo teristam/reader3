@@ -224,7 +224,10 @@ async def generate_illustrations_endpoint(book_id: str, chapter_index: int, requ
     # Parse settings from request body
     body = await request.json()
     num_images = body.get("numImages", 3)
-    style = body.get("style", "")
+    style = body.get("style", "detailed cinematic illustration")
+    # If style is empty string, use default
+    if not style or not style.strip():
+        style = "detailed cinematic illustration"
     print(f"[DEBUG] Settings - numImages: {num_images}, style: '{style}'")
 
     book = load_book_cached(book_id)
@@ -433,7 +436,10 @@ async def generate_all_illustrations_endpoint(book_id: str, request: Request, ba
     # Parse settings from request body
     body = await request.json()
     num_images = body.get("numImages", 3)
-    style = body.get("style", "")
+    style = body.get("style", "detailed cinematic illustration")
+    # If style is empty string, use default
+    if not style or not style.strip():
+        style = "detailed cinematic illustration"
     print(f"[BATCH DEBUG] Settings - numImages: {num_images}, style: '{style}'")
 
     book = load_book_cached(book_id)

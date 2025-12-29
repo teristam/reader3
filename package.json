@@ -1,0 +1,22 @@
+{
+  "name": "reader3",
+  "version": "1.0.0",
+  "description": "![reader3](reader3.png)",
+  "main": "test_customization.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:51533/git/teristam/reader3"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "playwright": "^1.57.0"
+  }
+}
