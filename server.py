@@ -215,11 +215,20 @@ async def read_chapter(request: Request, book_id: str, chapter_index: int, backg
 
 
 @app.post("/read/{book_id}/{chapter_index}/generate-illustrations")
-async def generate_illustrations_endpoint(book_id: str, chapter_index: int, background_tasks: BackgroundTasks):
+async def generate_illustrations_endpoint(book_id: str, chapter_index: int, request: Request, background_tasks: BackgroundTasks):
     """Manually trigger illustration generation for a chapter (force regenerate)."""
     print(f"[DEBUG] ===== POST /generate-illustrations endpoint called ======")
     print(f"[DEBUG] Book ID: {book_id}")
     print(f"[DEBUG] Chapter Index: {chapter_index}")
+
+    # Parse settings from request body
+    body = await request.json()
+    num_images = body.get("numImages", 3)
+    style = body.get("style", "detailed cinematic illustration")
+    # If style is empty string, use default
+    if not style or not style.strip():
+        style = "detailed cinematic illustration"
+    print(f"[DEBUG] Settings - numImages: {num_images}, style: '{style}'")
 
     book = load_book_cached(book_id)
     if not book:
@@ -244,13 +253,15 @@ async def generate_illustrations_endpoint(book_id: str, chapter_index: int, back
         current_chapter.text,
         book.metadata.title,  # Pass book title for thematic context
         current_chapter.title,  # Pass chapter title for filename
-        True  # force_regenerate=True
+        True,  # force_regenerate=True
+        num_images,  # NEW: number of images to generate
+        style  # NEW: artistic style
     )
     print(f"[DEBUG] Background task added successfully")
 
     response_data = {
         "status": "generating",
-        "message": "Illustration regeneration started. Refresh the page in a few moments to see the new images."
+        "message": f"Generating {num_images} illustration(s). Refresh the page in a few moments to see the images."
     }
     print(f"[DEBUG] Returning response: {response_data}")
     return JSONResponse(response_data)
@@ -317,13 +328,14 @@ def count_words(text: str) -> int:
     return len(text.split())
 
 
-async def batch_generate_all_illustrations(book_id: str, book: Book, batch_id: str):
+async def batch_generate_all_illustrations(book_id: str, book: Book, batch_id: str, num_images: int = 3, style: str = ""):
     """
     Background task to generate illustrations for all eligible chapters in parallel.
     Uses semaphore to limit concurrent API calls to 3.
     Only generates for chapters with 1000+ words.
     """
     print(f"[BATCH DEBUG] Starting batch generation {batch_id} for {book_id}")
+    print(f"[BATCH DEBUG] Settings - numImages: {num_images}, style: '{style}'")
 
     # Initialize progress file
     book_path = get_book_path(book_id)
@@ -367,8 +379,8 @@ async def batch_generate_all_illustrations(book_id: str, book: Book, batch_id: s
             try:
                 # Check if already has illustrations
                 cached = get_cached_images(book_path, chapter_idx)
-                if cached and len(cached) >= 3:
-                    print(f"[BATCH DEBUG] Chapter {chapter_idx} already has illustrations, skipping")
+                if cached and len(cached) >= num_images:
+                    print(f"[BATCH DEBUG] Chapter {chapter_idx} already has {len(cached)} illustrations, skipping")
                 else:
                     # Generate illustrations (runs in thread pool since it's sync)
                     await asyncio.to_thread(
@@ -378,7 +390,9 @@ async def batch_generate_all_illustrations(book_id: str, book: Book, batch_id: s
                         chapter.text,
                         book.metadata.title,
                         chapter.title,
-                        False  # Don't force regenerate if exists
+                        False,  # Don't force regenerate if exists
+                        num_images,  # NEW: number of images
+                        style  # NEW: artistic style
                     )
                     print(f"[BATCH DEBUG] Chapter {chapter_idx} completed successfully")
 
@@ -415,9 +429,18 @@ async def batch_generate_all_illustrations(book_id: str, book: Book, batch_id: s
 
 
 @app.post("/read/{book_id}/generate-all-illustrations")
-async def generate_all_illustrations_endpoint(book_id: str, background_tasks: BackgroundTasks):
+async def generate_all_illustrations_endpoint(book_id: str, request: Request, background_tasks: BackgroundTasks):
     """Start batch generation for all eligible chapters in the book."""
     print(f"[BATCH DEBUG] POST /generate-all-illustrations for {book_id}")
+
+    # Parse settings from request body
+    body = await request.json()
+    num_images = body.get("numImages", 3)
+    style = body.get("style", "detailed cinematic illustration")
+    # If style is empty string, use default
+    if not style or not style.strip():
+        style = "detailed cinematic illustration"
+    print(f"[BATCH DEBUG] Settings - numImages: {num_images}, style: '{style}'")
 
     book = load_book_cached(book_id)
     if not book:
@@ -431,8 +454,8 @@ async def generate_all_illustrations_endpoint(book_id: str, background_tasks: Ba
 
     print(f"[BATCH DEBUG] Starting batch {batch_id}: {eligible_count}/{len(book.spine)} eligible chapters")
 
-    # Start background task
-    background_tasks.add_task(batch_generate_all_illustrations, book_id, book, batch_id)
+    # Start background task with settings
+    background_tasks.add_task(batch_generate_all_illustrations, book_id, book, batch_id, num_images, style)
 
     return JSONResponse({
         "status": "started",

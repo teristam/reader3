@@ -73,7 +73,7 @@
                 <div class="h-px bg-gray-200"></div>
                 <button
                     class="block w-full px-4 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50 transition-colors rounded-b-lg"
-                    onclick="generateAllIllustrations(); closeBookMenu();">
+                    onclick="showIllustrationDialog(true); closeBookMenu();">
                     Generate All Illustrations
                 </button>
             </div>
@@ -148,6 +148,43 @@
         {{ render_toc(book.toc) }}
     </div>
 
+    <!-- Illustration Customization Dialog -->
+    <div id="illustration-dialog" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4 font-sans">Customize Illustrations</h2>
+
+            <div class="space-y-4">
+                <!-- Number of images -->
+                <div>
+                    <label for="num-images" class="block text-sm font-medium text-gray-700 mb-1">Number of Images</label>
+                    <input type="number" id="num-images" min="1" max="10" value="3"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary focus:border-primary">
+                    <p class="text-xs text-gray-500 mt-1">How many illustrations to generate per chapter (1-10)</p>
+                </div>
+
+                <!-- Style customization -->
+                <div>
+                    <label for="image-style" class="block text-sm font-medium text-gray-700 mb-1">Style</label>
+                    <input type="text" id="image-style" placeholder="Default: detailed cinematic illustration"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary focus:border-primary">
+                    <p class="text-xs text-gray-500 mt-1">Artistic style for illustrations (e.g., anime, realistic, watercolor, oil painting, etc.)</p>
+                </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex gap-3 mt-6">
+                <button onclick="cancelIllustrationDialog()"
+                    class="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors font-sans">
+                    Cancel
+                </button>
+                <button onclick="confirmIllustrationDialog()"
+                    class="flex-1 px-4 py-2 bg-primary text-white rounded-md hover:bg-primary-dark transition-colors font-sans">
+                    Generate
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Floating Action Button (Fixed Lower Right) -->
     <div class="fixed bottom-6 right-6 z-50">
         <!-- Status Text (shown above the button) -->
@@ -155,7 +192,7 @@
 
         <!-- Dropdown Menu (appears above button) -->
         <div class="hidden absolute bottom-full right-0 mb-3 bg-white border border-gray-200 rounded-lg shadow-xl min-w-[220px]" id="actions-dropdown-menu">
-            <button class="block w-full px-4 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50 transition-colors disabled:text-gray-400 disabled:cursor-not-allowed disabled:bg-transparent rounded-t-lg" id="generate-illustrations-btn" onclick="generateIllustrations(); closeDropdown();">
+            <button class="block w-full px-4 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50 transition-colors disabled:text-gray-400 disabled:cursor-not-allowed disabled:bg-transparent rounded-t-lg" id="generate-illustrations-btn" onclick="showIllustrationDialog(false); closeDropdown();">
                 <span id="illustration-btn-text">Generate Illustrations</span>
             </button>
             <div class="h-px bg-gray-200"></div>
@@ -201,6 +238,78 @@
     </div>
 
     <script>
+        // ============= ILLUSTRATION SETTINGS (localStorage) =============
+
+        const SETTINGS_KEY = 'illustration_settings';
+        let isBatchMode = false;  // Track whether we're in batch mode
+
+        function loadIllustrationSettings() {
+            const saved = localStorage.getItem(SETTINGS_KEY);
+            if (saved) {
+                try {
+                    return JSON.parse(saved);
+                } catch (e) {
+                    console.error('[SETTINGS] Failed to parse settings:', e);
+                }
+            }
+            // Default settings
+            return {
+                numImages: 3,
+                style: 'detailed cinematic illustration'
+            };
+        }
+
+        function saveIllustrationSettings(settings) {
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+            console.log('[SETTINGS] Saved:', settings);
+        }
+
+        function showIllustrationDialog(batchMode = false) {
+            console.log('[DIALOG] Opening illustration dialog, batch mode:', batchMode);
+            isBatchMode = batchMode;
+
+            // Load saved settings
+            const settings = loadIllustrationSettings();
+            document.getElementById('num-images').value = settings.numImages;
+            document.getElementById('image-style').value = settings.style;
+
+            // Show dialog
+            document.getElementById('illustration-dialog').classList.remove('hidden');
+        }
+
+        function cancelIllustrationDialog() {
+            console.log('[DIALOG] Dialog cancelled');
+            document.getElementById('illustration-dialog').classList.add('hidden');
+        }
+
+        function confirmIllustrationDialog() {
+            console.log('[DIALOG] Dialog confirmed');
+
+            // Get settings from form
+            const numImages = parseInt(document.getElementById('num-images').value) || 3;
+            const style = document.getElementById('image-style').value.trim();
+
+            // Validate
+            if (numImages < 1 || numImages > 10) {
+                alert('Number of images must be between 1 and 10');
+                return;
+            }
+
+            // Save settings
+            const settings = { numImages, style };
+            saveIllustrationSettings(settings);
+
+            // Close dialog
+            document.getElementById('illustration-dialog').classList.add('hidden');
+
+            // Trigger generation based on mode
+            if (isBatchMode) {
+                generateAllIllustrationsWithSettings(settings);
+            } else {
+                generateIllustrationsWithSettings(settings);
+            }
+        }
+
         // Mobile menu controls
         const sidebar = document.getElementById('sidebar');
         const overlay = document.getElementById('mobile-overlay');
@@ -276,21 +385,25 @@
             }
         });
 
-        // Generate illustrations for all chapters in the book
-        async function generateAllIllustrations() {
+        // Generate illustrations for all chapters in the book (with settings)
+        async function generateAllIllustrationsWithSettings(settings) {
             const totalChapters = {{ book.spine | length }};
 
-            if (!confirm('This will generate illustrations for all ' + totalChapters + ' chapters (filtered by length). This may take 10-30 minutes. Continue?')) {
+            if (!confirm('This will generate ' + settings.numImages + ' illustration(s) for all ' + totalChapters + ' chapters (filtered by length). This may take 10-30 minutes. Continue?')) {
                 return;
             }
 
             console.log('[DEBUG] Starting bulk illustration generation for all chapters');
-            closeBookMenu();
+            console.log('[DEBUG] Settings:', settings);
 
             try {
-                // Start batch generation
+                // Start batch generation with settings
                 const response = await fetch('/read/' + bookId + '/generate-all-illustrations', {
-                    method: 'POST'
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(settings)
                 });
 
                 if (!response.ok) {
@@ -522,10 +635,11 @@
             }
         }
 
-        async function generateIllustrations() {
+        async function generateIllustrationsWithSettings(settings) {
             console.log('[DEBUG] ===== Starting illustration generation =====');
             console.log('[DEBUG] Book ID:', bookId);
             console.log('[DEBUG] Chapter Index:', chapterIndex);
+            console.log('[DEBUG] Settings:', settings);
 
             const btn = document.getElementById('generate-illustrations-btn');
             const btnText = document.getElementById('illustration-btn-text');
@@ -534,7 +648,7 @@
             // Disable button and show loading
             btn.disabled = true;
             btnText.innerHTML = '<span class="inline-block w-4 h-4 border-2 border-gray-200 border-t-primary rounded-full animate-spin mr-2"></span>Generating...';
-            statusDiv.textContent = 'Generating (0/3)...';
+            statusDiv.textContent = `Generating (0/${settings.numImages})...`;
             statusDiv.classList.remove('hidden');
 
             try {
@@ -542,7 +656,11 @@
                 console.log('[DEBUG] POST request to:', url);
 
                 const response = await fetch(url, {
-                    method: 'POST'
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(settings)
                 });
 
                 console.log('[DEBUG] Response status:', response.status, response.statusText);
@@ -558,7 +676,7 @@
                     console.log('[DEBUG] Generation started, beginning polling...');
                     // Poll for completion
                     let attempts = 0;
-                    const maxAttempts = 180; // 180 seconds (3 minutes) - generation can take a while
+                    const maxAttempts = 180 * settings.numImages; // Scale timeout with number of images
 
                     const pollInterval = setInterval(async () => {
                         attempts++;
@@ -571,8 +689,8 @@
                             // Update progress indicator with current image count
                             if (statusData.status === 'generating' && statusData.current_image_count !== undefined) {
                                 const progress = statusData.current_image_count || 0;
-                                statusDiv.textContent = `Generating (${progress}/3)...`;
-                                console.log(`[DEBUG] Progress update: ${progress}/3 images`);
+                                statusDiv.textContent = `Generating (${progress}/${settings.numImages})...`;
+                                console.log(`[DEBUG] Progress update: ${progress}/${settings.numImages} images`);
                             }
 
                             // Check for error status
@@ -590,9 +708,9 @@
                                     statusDiv.classList.remove('!text-red-600');
                                 }, 10000);
                             }
-                            // Check that we have all 3 illustrations (not just some)
-                            else if (statusData.has_illustrations && statusData.image_count === 3) {
-                                console.log('[DEBUG] ✓ All 3 illustrations found! Stopping poll.');
+                            // Check that we have all requested illustrations
+                            else if (statusData.has_illustrations && statusData.image_count === settings.numImages) {
+                                console.log(`[DEBUG] ✓ All ${settings.numImages} illustrations found! Stopping poll.`);
                                 clearInterval(pollInterval);
                                 statusDiv.textContent = `✓ ${statusData.image_count} generated!`;
                                 statusDiv.classList.add('!text-green-600');

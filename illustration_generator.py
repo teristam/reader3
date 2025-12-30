@@ -97,21 +97,25 @@ def get_gemini_client():
     return genai.Client(api_key=api_key)
 
 
-def summarize_scenes(chapter_text: str) -> List[Dict]:
+def summarize_scenes(chapter_text: str, num_scenes: int = 3) -> List[Dict]:
     """
-    Sends chapter text to Gemini 3.0 Flash asking for 3 main scene summaries.
+    Sends chapter text to Gemini 3.0 Flash asking for N main scene summaries.
+
+    Args:
+        chapter_text: The chapter text to analyze
+        num_scenes: Number of scenes to identify (default: 3)
 
     Returns list of scene dicts with:
     - summary: str - summary of the scene
     - location_in_text: int - approximate character position (0-100 percentage)
-    - scene_number: int - 1, 2, or 3
+    - scene_number: int - 1, 2, 3, etc.
     """
     if not chapter_text or len(chapter_text.strip()) == 0:
         return []
 
     client = get_gemini_client()
 
-    prompt = f"""Analyze the following chapter from a book and identify the 3 most important scenes to illustrate.
+    prompt = f"""Analyze the following chapter from a book and identify the {num_scenes} most important scenes to illustrate.
 
 CRITICAL PLACEMENT INSTRUCTION:
 For each scene, identify the exact sentence that should appear BEFORE the illustration.
@@ -132,27 +136,16 @@ And you want the illustration to appear after "storm clouds gathered", provide:
 - insert_after_text: "The sky darkened as storm clouds gathered."
 - The illustration will be inserted after the paragraph containing this sentence
 
-Format your response as JSON with this structure:
+Format your response as JSON with exactly {num_scenes} scenes in this structure:
 {{
     "scenes": [
         {{
             "scene_number": 1,
             "summary": "description of the scene",
             "insert_after_text": "The exact sentence from the chapter.",
-            "location_percent": 25
+            "location_percent": <evenly distributed percentage>
         }},
-        {{
-            "scene_number": 2,
-            "summary": "description of the scene",
-            "insert_after_text": "Another exact sentence from the chapter.",
-            "location_percent": 50
-        }},
-        {{
-            "scene_number": 3,
-            "summary": "description of the scene",
-            "insert_after_text": "A third exact sentence from the chapter.",
-            "location_percent": 75
-        }}
+        ... ({num_scenes} scenes total)
     ]
 }}
 
@@ -226,23 +219,24 @@ Chapter text:
                 logger.warning(f"Scene {scene.get('scene_number')} missing location_percent, using default")
                 scene["location_percent"] = 33 * (scene.get("scene_number", 1) - 1)
 
-        # Ensure we have exactly 3 scenes, pad if needed
-        while len(scenes) < 3:
+        # Ensure we have exactly num_scenes scenes, pad if needed
+        while len(scenes) < num_scenes:
+            idx = len(scenes)
             scenes.append({
-                "scene_number": len(scenes) + 1,
+                "scene_number": idx + 1,
                 "summary": "A scene from the chapter",
                 "insert_after_text": None,
-                "location_percent": 33 * len(scenes)
+                "location_percent": int(100 * (idx + 0.5) / num_scenes)
             })
 
-        logger.info(f"Returning {len(scenes[:3])} scenes")
-        for i, scene in enumerate(scenes[:3]):
+        logger.info(f"Returning {len(scenes[:num_scenes])} scenes")
+        for i, scene in enumerate(scenes[:num_scenes]):
             anchor_preview = scene.get('insert_after_text', 'None')
             if anchor_preview and len(anchor_preview) > 60:
                 anchor_preview = anchor_preview[:60] + "..."
             logger.debug(f"Scene {i+1}: number={scene.get('scene_number')}, location={scene.get('location_percent')}%, anchor='{anchor_preview}', summary_length={len(scene.get('summary', ''))}")
 
-        return scenes[:3]  # Return only first 3
+        return scenes[:num_scenes]  # Return only requested number
 
     except json.JSONDecodeError as e:
         logger.error("❌ JSON parsing failed")
@@ -251,41 +245,48 @@ Chapter text:
         logger.debug(f"Full response text length: {len(response_text)}")
         # Fallback: create generic scenes
         logger.warning("⚠️ Using fallback scenes")
-        return [
-            {"scene_number": 1, "summary": "An important scene from the chapter", "insert_after_text": None, "location_percent": 25},
-            {"scene_number": 2, "summary": "Another important scene from the chapter", "insert_after_text": None, "location_percent": 50},
-            {"scene_number": 3, "summary": "A third important scene from the chapter", "insert_after_text": None, "location_percent": 75},
-        ]
+        fallback_scenes = []
+        for i in range(num_scenes):
+            fallback_scenes.append({
+                "scene_number": i + 1,
+                "summary": f"An important scene from the chapter (scene {i+1})",
+                "insert_after_text": None,
+                "location_percent": int(100 * (i + 0.5) / num_scenes)
+            })
+        return fallback_scenes
     except Exception as e:
         logger.exception(f"❌ Exception in summarize_scenes: {type(e).__name__}: {str(e)}")
         raise
 
 
-def create_image_prompt(scene_summary: str, book_title: str = "") -> str:
+def create_image_prompt(scene_summary: str, book_title: str = "", style: str = "") -> str:
     """
     Takes a scene summary and creates a detailed, descriptive prompt for image generation.
 
     Args:
         scene_summary: Summary of the scene to illustrate
         book_title: Title of the book for thematic context
+        style: Artistic style for the illustration (e.g., "anime", "realistic", "watercolor")
     """
     book_context = f" from the book '{book_title}'" if book_title else " from a book"
 
-    prompt = f"""Create a detailed, cinematic illustration of this scene {book_context}:
+    prompt = f"""Create a suitable illustration of this scene {book_context}:
 
 {scene_summary}
 
 The image should be:
 - High quality and visually appealing
-- Appropriate for a book illustration
 - Capturing the mood and atmosphere of the scene
 - Do not include any text in the image. Avoid making it like a comic
-- Detailed and evocative
-- In a style suitable for a literary work{f" and consistent with the themes of '{book_title}'" if book_title else ""}
+
+You MUST follow the following stylistic instruction closely:
+{style}
 
 Generate a beautiful illustration that captures the essence of this scene."""
 
     logger.debug(f"Created image prompt (length: {len(prompt)} chars)")
+    if style:
+        logger.debug(f"Using custom style: {style}")
     logger.trace(f"Prompt preview: {prompt[:200]}...")
 
     return prompt
@@ -470,14 +471,14 @@ def get_cached_images(book_id: str, chapter_index: int) -> Optional[List[str]]:
     Returns list of image paths if cached, None otherwise.
     """
     metadata_file = os.path.join(book_id, "generated_images.json")
-    
+
     if not os.path.exists(metadata_file):
         return None
-    
+
     try:
         with open(metadata_file, "r") as f:
             metadata = json.load(f)
-        
+
         chapter_key = str(chapter_index)
         if chapter_key in metadata:
             # Handle both old format (list) and new format (dict with "images" key)
@@ -488,17 +489,23 @@ def get_cached_images(book_id: str, chapter_index: int) -> Optional[List[str]]:
                 image_paths = chapter_data["images"]
             else:
                 return None
-            
+
             # Verify images actually exist
             existing_paths = []
             for img_path in image_paths:
                 full_path = os.path.join(book_id, img_path)
                 if os.path.exists(full_path):
                     existing_paths.append(img_path)
-            
-            if len(existing_paths) == 3:  # All 3 images exist
+
+            # Return cached images if all exist and status is completed
+            if existing_paths and isinstance(chapter_data, dict):
+                # Check if generation is complete
+                if chapter_data.get("status") == "completed" and len(existing_paths) == len(image_paths):
+                    return existing_paths
+            elif existing_paths and len(existing_paths) == len(image_paths):
+                # Legacy format (list) - just check all images exist
                 return existing_paths
-        
+
         return None
     except Exception as e:
         print(f"Error reading cache metadata: {e}")
@@ -561,7 +568,7 @@ def save_image_metadata(
         json.dump(metadata, f, indent=2)
 
 
-def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter_text: str, book_title: str = "", chapter_title: str = "", force_regenerate: bool = False) -> List[str]:
+def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter_text: str, book_title: str = "", chapter_title: str = "", force_regenerate: bool = False, num_images: int = 3, style: str = "") -> List[str]:
     """
     Main function to generate illustrations for a chapter.
 
@@ -572,6 +579,8 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
         book_title: Title of the book for thematic context in image generation
         chapter_title: Title of the chapter for filename generation
         force_regenerate: If True, regenerate images even if cached versions exist
+        num_images: Number of illustrations to generate (default: 3)
+        style: Artistic style for the illustrations (e.g., "anime", "realistic", "watercolor")
 
     Returns:
         List of image paths (relative to book directory)
@@ -585,13 +594,18 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
     logger.info(f"Chapter Title: {chapter_title}")
     logger.debug(f"Chapter text length: {len(chapter_text)} chars")
     logger.info(f"Force regenerate: {force_regenerate}")
+    logger.info(f"Number of images: {num_images}")
+    logger.info(f"Style: {style if style else '(default)'}")
 
     # Check cache first (unless force_regenerate is True)
     if not force_regenerate:
         cached = get_cached_images(book_id, chapter_index)
-        if cached:
-            logger.success(f"✅ Found cached images: {cached}")
+        if cached and len(cached) == num_images:
+            logger.success(f"✅ Found {len(cached)} cached images: {cached}")
             return cached
+        elif cached:
+            logger.warning(f"⚠️ Found {len(cached)} cached images, but need {num_images}. Will regenerate.")
+            force_regenerate = True
 
     if force_regenerate:
         logger.warning("🗑️  Force regenerate enabled, deleting old images...")
@@ -634,7 +648,7 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
     try:
         # Generate scenes
         logger.info("📋 Step 1: Summarizing scenes...")
-        scenes = summarize_scenes(chapter_text)
+        scenes = summarize_scenes(chapter_text, num_scenes=num_images)
         logger.success(f"✅ Got {len(scenes)} scenes")
 
         image_paths = []
@@ -647,7 +661,7 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
             logger.info("=" * 60)
             scene_num = scene["scene_number"]
             scene_summary = scene["summary"]
-            scene_location = scene.get("location_percent", 33 * (scene_num - 1))
+            scene_location = scene.get("location_percent", int(100 * (i + 0.5) / num_images))
             scene_anchor = scene.get("insert_after_text")  # NEW: Extract anchor text
 
             scene_locations.append(scene_location)
@@ -662,7 +676,7 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
             try:
                 # Create image prompt
                 logger.info(f"📝 Step 2: Creating image prompt for scene {i+1}...")
-                prompt = create_image_prompt(scene_summary, book_title)
+                prompt = create_image_prompt(scene_summary, book_title, style)
 
                 # Generate image
                 logger.info(f"🎨 Step 3: Generating image for scene {i+1}...")
@@ -689,7 +703,7 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
                     status="generating",
                     current_image_count=len(image_paths)
                 )
-                logger.info(f"📊 Progress: {len(image_paths)}/3 images completed")
+                logger.info(f"📊 Progress: {len(image_paths)}/{num_images} images completed")
 
             except Exception as e:
                 logger.error("=" * 60)
