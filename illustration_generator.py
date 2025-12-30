@@ -269,19 +269,18 @@ def create_image_prompt(scene_summary: str, book_title: str = "", style: str = "
         style: Artistic style for the illustration (e.g., "anime", "realistic", "watercolor")
     """
     book_context = f" from the book '{book_title}'" if book_title else " from a book"
-    style_instruction = f"\n- In {style} style" if style else ""
 
-    prompt = f"""Create a detailed, cinematic illustration of this scene {book_context}:
+    prompt = f"""Create a suitable illustration of this scene {book_context}:
 
 {scene_summary}
 
 The image should be:
 - High quality and visually appealing
-- Appropriate for a book illustration
 - Capturing the mood and atmosphere of the scene
 - Do not include any text in the image. Avoid making it like a comic
-- Detailed and evocative{style_instruction}
-- In a style suitable for a literary work{f" and consistent with the themes of '{book_title}'" if book_title else ""}
+
+You MUST follow the following stylistic instruction closely:
+{style}
 
 Generate a beautiful illustration that captures the essence of this scene."""
 
@@ -472,14 +471,14 @@ def get_cached_images(book_id: str, chapter_index: int) -> Optional[List[str]]:
     Returns list of image paths if cached, None otherwise.
     """
     metadata_file = os.path.join(book_id, "generated_images.json")
-    
+
     if not os.path.exists(metadata_file):
         return None
-    
+
     try:
         with open(metadata_file, "r") as f:
             metadata = json.load(f)
-        
+
         chapter_key = str(chapter_index)
         if chapter_key in metadata:
             # Handle both old format (list) and new format (dict with "images" key)
@@ -490,17 +489,23 @@ def get_cached_images(book_id: str, chapter_index: int) -> Optional[List[str]]:
                 image_paths = chapter_data["images"]
             else:
                 return None
-            
+
             # Verify images actually exist
             existing_paths = []
             for img_path in image_paths:
                 full_path = os.path.join(book_id, img_path)
                 if os.path.exists(full_path):
                     existing_paths.append(img_path)
-            
-            if len(existing_paths) == 3:  # All 3 images exist
+
+            # Return cached images if all exist and status is completed
+            if existing_paths and isinstance(chapter_data, dict):
+                # Check if generation is complete
+                if chapter_data.get("status") == "completed" and len(existing_paths) == len(image_paths):
+                    return existing_paths
+            elif existing_paths and len(existing_paths) == len(image_paths):
+                # Legacy format (list) - just check all images exist
                 return existing_paths
-        
+
         return None
     except Exception as e:
         print(f"Error reading cache metadata: {e}")
@@ -698,7 +703,7 @@ def generate_illustrations_for_chapter(book_id: str, chapter_index: int, chapter
                     status="generating",
                     current_image_count=len(image_paths)
                 )
-                logger.info(f"📊 Progress: {len(image_paths)}/3 images completed")
+                logger.info(f"📊 Progress: {len(image_paths)}/{num_images} images completed")
 
             except Exception as e:
                 logger.error("=" * 60)
